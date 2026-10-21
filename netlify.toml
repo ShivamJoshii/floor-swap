@@ -1,4 +1,5 @@
 [build]
   base = "web"
-  command = "npm run build"
+  command = "npx vite build"
   publish = "dist"
+  environment = { NODE_VERSION = "22" }

@@ -56,6 +56,32 @@ export default function Products({ ctx }: { ctx: Ctx }) {
     finally { setBusy(false); }
   }
 
+  const [importMsg, setImportMsg] = useState<string | null>(null);
+  async function importCatalog(f: File | undefined) {
+    if (!f) return;
+    setImportMsg("Reading file…");
+    try {
+      const items = JSON.parse(await f.text()) as { name: string; type?: string; sku?: string | null; notes?: string | null; length_in?: number | null; width_in?: number | null; jpg_b64: string }[];
+      if (!Array.isArray(items)) throw new Error("Not a catalog file.");
+      const existing = new Set(list.map((p) => p.name.toLowerCase()));
+      let done = 0, skipped = 0; const errors: string[] = [];
+      for (const it of items) {
+        if (!it.name || !it.jpg_b64) { skipped++; continue; }
+        if (existing.has(it.name.toLowerCase())) { skipped++; continue; }
+        setImportMsg(`Importing ${done + 1} of ${items.length}: ${it.name}`);
+        const bytes = Uint8Array.from(atob(it.jpg_b64), (c) => c.charCodeAt(0));
+        const id = crypto.randomUUID(); const path = `${store}/${id}.jpg`;
+        const up = await supabase.storage.from("swatches").upload(path, bytes, { contentType: "image/jpeg" });
+        if (up.error) { errors.push(`${it.name}: ${up.error.message}`); continue; }
+        const type = ["plank", "tile", "carpet", "other"].includes(it.type ?? "") ? it.type : "tile";
+        const { error } = await supabase.from("products").insert({ id, store_id: store, name: it.name, type, sku: it.sku ?? null, notes: it.notes ?? null, length_in: it.length_in ?? null, width_in: it.width_in ?? null, swatch_path: path, created_by: ctx.session.user.id });
+        if (error) errors.push(`${it.name}: ${error.message}`); else done++;
+      }
+      setImportMsg(`Imported ${done}${skipped ? `, skipped ${skipped} already there` : ""}${errors.length ? `, ${errors.length} failed: ${errors[0]}` : ""}.`);
+      ctx.toast(`Imported ${done} products.`); load();
+    } catch (e) { setImportMsg(e instanceof Error ? e.message : String(e)); }
+  }
+
   async function toggle(p: Product) {
     await supabase.from("products").update({ active: !p.active }).eq("id", p.id); load();
   }
@@ -104,6 +130,13 @@ export default function Products({ ctx }: { ctx: Ctx }) {
         <div className="row" style={{ justifyContent: "space-between" }}>
           <h2>Catalog · {list.filter((p) => p.active).length} active</h2>
           <label className="row small muted"><input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} /> show hidden</label>
+        </div>
+        <div className="row">
+          <label className="sm" style={{ display: "inline-block" }}>
+            <span className="small muted">Import catalog file (.json): </span>
+            <input type="file" accept="application/json,.json" style={{ width: "auto" }} onChange={(e) => { importCatalog(e.target.files?.[0]); e.target.value = ""; }} />
+          </label>
+          {importMsg && <span className="small">{importMsg}</span>}
         </div>
         {!shown.length && <p className="muted">No products yet. Add the 5–10 you sell most.</p>}
         {shown.length > 0 && (

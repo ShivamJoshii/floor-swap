@@ -17,6 +17,12 @@ export type Membership = { store_id: string; role: "owner" | "staff"; stores: St
 export type Product = {
   id: string; store_id: string; name: string; sku: string | null; type: "plank" | "tile" | "carpet" | "other";
   length_in: number | null; width_in: number | null; price_per_sqft: number | null; swatch_path: string; notes: string | null; active: boolean; created_at: string;
+  supplier_id?: string | null; supplier_product_id?: string | null; finish?: string | null; colour_family?: string | null; collection?: string | null;
+};
+export type Supplier = { id: string; name: string; website: string | null; region: string | null; store_id: string | null; created_by: string | null };
+export type SupplierProduct = {
+  id: string; supplier_id: string; sku: string; name: string; type: "plank" | "tile" | "carpet" | "other"; length_in: number | null; width_in: number | null;
+  thickness_mm: number | null; finish: string | null; colour_family: string | null; collection: string | null; notes: string | null; swatch_path: string | null; created_by: string | null;
 };
 export type Render = {
   id: string; store_id: string; product_id: string | null; user_id: string | null; room_path: string;

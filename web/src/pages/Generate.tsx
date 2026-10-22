@@ -23,6 +23,7 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
   const [direction, setDirection] = useState("auto");
   const [pattern, setPattern] = useState("");
   const [lead, setLead] = useState({ name: "", phone: "" });
+  const [nOpts, setNOpts] = useState(1);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [results, setResults] = useState<{ before: string | null; outputs: Output[]; product: Product; renderId: string; roomPath: string } | null>(null);
@@ -75,9 +76,9 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
       const roomPath = `${store}/${crypto.randomUUID()}/room.jpg`;
       const up = await supabase.storage.from("rooms").upload(roomPath, blob, { contentType: "image/jpeg" });
       if (up.error) throw new Error("Upload failed: " + up.error.message);
-      setBusy("Rendering 3 options (15–40 s)…");
+      setBusy(`Rendering ${nOpts} option${nOpts === 1 ? "" : "s"} (15–40 s)…`);
       const { data, error } = await supabase.functions.invoke("generate", {
-        body: { store_id: store, product_id: product.id, room_path: roomPath, options: { direction, pattern }, lead_name: lead.name || null, lead_phone: lead.phone || null },
+        body: { store_id: store, product_id: product.id, room_path: roomPath, options: { direction, pattern }, lead_name: lead.name || null, lead_phone: lead.phone || null, num_images: nOpts },
       });
       if (error) {
         let msg = error.message;
@@ -189,8 +190,13 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
           <label className="f">Lead phone (optional)<input type="tel" value={lead.phone} onChange={(e) => setLead({ ...lead, phone: e.target.value })} /></label>
         </div>
 
+        <div className="row">
+          <span className="small muted">Options</span>
+          <div className="seg">{[1, 2, 3].map((n) => <button key={n} type="button" className={nOpts === n ? "on" : ""} onClick={() => setNOpts(n)}>{n}</button>)}</div>
+          <span className="small muted">1 is usually enough; more options cost the same credit but take longer.</span>
+        </div>
         <button className="primary big" disabled={!file || !product || !!busy || noCredits} onClick={generate}>
-          {busy ? <><span className="spinner" /> {busy}</> : noCredits ? "No credits left" : "Generate 3 options · 1 credit"}
+          {busy ? <><span className="spinner" /> {busy}</> : noCredits ? "No credits left" : `Generate ${nOpts} option${nOpts === 1 ? "" : "s"} · 1 credit`}
         </button>
         {err && <p className="warn small">{err}</p>}
         {noCredits && <p className="small muted">Top up under Credits.</p>}
@@ -199,7 +205,7 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>
         <div className="card">
           <h2>{results ? `Options · ${results.product.name}` : "Options"}</h2>
-          {!results && <p className="muted">Your 3 options show up here. Click any to enlarge, then download or copy to text it.</p>}
+          {!results && <p className="muted">Your options show up here. Click any to enlarge, then download, copy, or add it to a proposal.</p>}
           {results && (
             <div className="results">
               {results.before && (

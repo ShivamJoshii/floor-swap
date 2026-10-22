@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRef } from "react";
-import { supabase, type Product } from "../lib/supabase";
+import { supabase, signedUrl, type Product, type Supplier, type SupplierProduct } from "../lib/supabase";
 import { loadBitmap, analyze, rectify, whiteBalance, canvasToJpeg, type Quad, type Quality } from "../lib/image";
 import type { Ctx } from "../App";
 
-const empty = { name: "", sku: "", type: "plank", length: "48", width: "7", unit: "in", price: "", notes: "" };
+const empty = { name: "", sku: "", type: "plank", length: "48", width: "7", unit: "in", price: "", notes: "", supplier_id: "", finish: "", colour_family: "", collection: "", share: true, supplier_product_id: "" };
+const TYPES: Product["type"][] = ["plank", "tile", "carpet", "other"];
 
 export default function Products({ ctx }: { ctx: Ctx }) {
   const store = ctx.membership.store_id;
@@ -21,11 +22,21 @@ export default function Products({ ctx }: { ctx: Ctx }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [showInactive, setShowInactive] = useState(false);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [newSupplier, setNewSupplier] = useState<{ open: boolean; name: string; website: string; shared: boolean }>({ open: false, name: "", website: "", shared: true });
+  const [catQ, setCatQ] = useState("");
+  const [catHits, setCatHits] = useState<(SupplierProduct & { supplier?: { name: string } | null })[]>([]);
+  const [editing, setEditing] = useState<Product | null>(null);
+  const [editForm, setEditForm] = useState({ name: "", sku: "", type: "plank", length: "", width: "", finish: "", price: "", notes: "", supplier_id: "" });
+  const [editMsg, setEditMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const { data } = await supabase.from("products").select("*").eq("store_id", store).order("created_at", { ascending: false });
+    const [{ data }, { data: sup }] = await Promise.all([
+      supabase.from("products").select("*").eq("store_id", store).order("created_at", { ascending: false }),
+      supabase.from("suppliers").select("*").order("name"),
+    ]);
     const rows = (data ?? []) as Product[];
-    setList(rows);
+    setList(rows); setSuppliers((sup ?? []) as Supplier[]);
     if (rows.length) {
       const { data: u } = await supabase.storage.from("swatches").createSignedUrls(rows.map((p) => p.swatch_path), 3600);
       const map: Record<string, string> = {}; (u ?? []).forEach((x, i) => { if (x.signedUrl) map[rows[i].id] = x.signedUrl; }); setUrls(map);
@@ -73,6 +84,60 @@ export default function Products({ ctx }: { ctx: Ctx }) {
   }
   function cropUp() { if (dragRef.current >= 0 && bmp && quad) setQuality(analyze(bmp, quad)); dragRef.current = -1; }
 
+  useEffect(() => {
+    const q = catQ.trim(); if (q.length < 2) { setCatHits([]); return; }
+    const t = setTimeout(async () => {
+      const { data } = await supabase.from("supplier_products").select("*, supplier:suppliers(name)").or(`name.ilike.%${q}%,sku.ilike.%${q}%`).limit(12);
+      setCatHits((data ?? []) as (SupplierProduct & { supplier?: { name: string } | null })[]);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [catQ]);
+
+  async function useCatalogItem(sp: SupplierProduct) {
+    setForm((cur) => ({ ...cur, name: sp.name, sku: sp.sku, type: sp.type, unit: "in", length: sp.length_in ? String(sp.length_in) : cur.length, width: sp.width_in ? String(sp.width_in) : cur.width,
+      supplier_id: sp.supplier_id, finish: sp.finish ?? "", colour_family: sp.colour_family ?? "", collection: sp.collection ?? "", supplier_product_id: sp.id, share: false }));
+    setCatQ(""); setCatHits([]);
+    if (sp.swatch_path) {
+      const u = await signedUrl("catalog", sp.swatch_path);
+      if (u) { try { const b = await loadBitmap(await (await fetch(u)).blob(), 4000); const q: Quad = [[0, 0], [b.width, 0], [b.width, b.height], [0, b.height]]; setBmp(b); setQuad(q); setQuality(analyze(b, q)); } catch { /* user uploads instead */ } }
+    }
+  }
+  async function createSupplier() {
+    const name = newSupplier.name.trim(); if (!name) return;
+    const { data, error } = await supabase.from("suppliers").insert({ name, website: newSupplier.website.trim() || null, store_id: newSupplier.shared ? null : store, created_by: ctx.session.user.id }).select("*").single();
+    if (error) { setErr(error.message.includes("duplicate") ? "That supplier already exists." : error.message); return; }
+    setSuppliers((cur) => [...cur, data as Supplier].sort((a, b) => a.name.localeCompare(b.name)));
+    setForm((cur) => ({ ...cur, supplier_id: (data as Supplier).id })); setNewSupplier({ open: false, name: "", website: "", shared: true });
+  }
+  function startEdit(p: Product) {
+    setEditing(p); setEditMsg(null);
+    setEditForm({ name: p.name, sku: p.sku ?? "", type: p.type, length: p.length_in ? String(p.length_in) : "", width: p.width_in ? String(p.width_in) : "", finish: p.finish ?? "", price: p.price_per_sqft ? String(p.price_per_sqft) : "", notes: p.notes ?? "", supplier_id: p.supplier_id ?? "" });
+  }
+  async function saveEdit(e: React.FormEvent) {
+    e.preventDefault(); if (!editing) return;
+    let len = parseFloat(editForm.length) || null, wid = parseFloat(editForm.width) || null; if (len && wid && wid > len) [len, wid] = [wid, len];
+    const { error } = await supabase.from("products").update({
+      name: editForm.name.trim(), sku: editForm.sku.trim() || null, type: editForm.type, length_in: len, width_in: wid, finish: editForm.finish.trim() || null,
+      price_per_sqft: editForm.price ? parseFloat(editForm.price) : null, notes: editForm.notes.trim() || null, supplier_id: editForm.supplier_id || null,
+    }).eq("id", editing.id);
+    if (error) { setEditMsg(error.message); return; }
+    ctx.toast("Saved."); setEditing(null); load();
+  }
+  async function shareToCatalog(p: Product, blob?: Blob) {
+    if (!p.supplier_id || !p.sku) return;
+    let catalogPath: string | null = null;
+    try {
+      const b = blob ?? await (await fetch((await signedUrl("swatches", p.swatch_path)) ?? "")).blob();
+      catalogPath = `${ctx.session.user.id}/${crypto.randomUUID()}.jpg`;
+      const up = await supabase.storage.from("catalog").upload(catalogPath, b, { contentType: "image/jpeg" });
+      if (up.error) catalogPath = null;
+    } catch { catalogPath = null; }
+    await supabase.from("supplier_products").upsert({
+      supplier_id: p.supplier_id, sku: p.sku, name: p.name, type: p.type, length_in: p.length_in, width_in: p.width_in, finish: p.finish ?? null,
+      colour_family: p.colour_family ?? null, collection: p.collection ?? null, swatch_path: catalogPath, created_by: ctx.session.user.id,
+    }, { onConflict: "supplier_id,sku", ignoreDuplicates: true });
+  }
+
   async function save(e: React.FormEvent) {
     e.preventDefault(); setErr(null);
     if (!bmp || !quad) { setErr("Add a swatch: one plank or tile, straight on, filling the frame."); return; }
@@ -89,12 +154,16 @@ export default function Products({ ctx }: { ctx: Ctx }) {
       const up = await supabase.storage.from("swatches").upload(path, blob, { contentType: "image/jpeg" });
       if (up.error) throw new Error(up.error.message);
       const notes = [form.notes.trim(), quality ? `capture score ${quality.score}/100` : ""].filter(Boolean).join(" · ") || null;
-      const { error } = await supabase.from("products").insert({
-        id, store_id: store, name: form.name.trim(), sku: form.sku.trim() || null, type: form.type,
+      const row = {
+        id, store_id: store, name: form.name.trim(), sku: form.sku.trim() || null, type: form.type as Product["type"],
         length_in: needDims ? len : null, width_in: needDims ? wid : null,
         price_per_sqft: form.price ? parseFloat(form.price) : null, notes, swatch_path: path, created_by: ctx.session.user.id,
-      });
+        supplier_id: form.supplier_id || null, supplier_product_id: form.supplier_product_id || null, finish: form.finish.trim() || null,
+        colour_family: form.colour_family.trim() || null, collection: form.collection.trim() || null,
+      };
+      const { error } = await supabase.from("products").insert(row);
       if (error) throw new Error(error.message);
+      if (form.share && row.supplier_id && row.sku) await shareToCatalog({ ...row, active: true, created_at: "" } as Product, blob);
       ctx.toast(`${form.name} added.`);
       setForm(empty); setBmp(null); setQuad(null); setQuality(null);
       load();
@@ -145,9 +214,46 @@ export default function Products({ ctx }: { ctx: Ctx }) {
     <div className="two">
       <form className="card" onSubmit={save}>
         <h2>Add product</h2>
+        <label className="f">Find in supplier catalog
+          <input type="text" value={catQ} onChange={(e) => setCatQ(e.target.value)} placeholder="Type a product name or SKU…" />
+        </label>
+        {catHits.length > 0 && (
+          <div className="card" style={{ background: "var(--bg)", padding: 8, gap: 4 }}>
+            {catHits.map((h) => (
+              <button type="button" key={h.id} className="sm" style={{ textAlign: "left", display: "flex", gap: 8, justifyContent: "space-between" }} onClick={() => useCatalogItem(h)}>
+                <span><strong>{h.name}</strong> <span className="muted mono small">{h.sku}</span></span>
+                <span className="muted small">{h.supplier?.name}{h.length_in && h.width_in ? ` · ${h.length_in}×${h.width_in}"` : ""}{h.swatch_path ? " · swatch" : ""}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <label className="f">Name<input type="text" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Natural Oak 7×48 LVP" /></label>
         <div className="grid2">
-          <label className="f">SKU (optional)<input type="text" value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} /></label>
+          <label className="f">Supplier
+            <select value={form.supplier_id} onChange={(e) => e.target.value === "__new" ? setNewSupplier({ ...newSupplier, open: true }) : setForm({ ...form, supplier_id: e.target.value })}>
+              <option value="">— none —</option>
+              {suppliers.map((su) => <option key={su.id} value={su.id}>{su.name}{su.store_id ? " (private)" : ""}</option>)}
+              <option value="__new">+ New supplier…</option>
+            </select>
+          </label>
+          <label className="f">Supplier SKU<input type="text" value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} placeholder="e.g. FBK652" /></label>
+        </div>
+        {newSupplier.open && (
+          <div className="card" style={{ background: "var(--bg)" }}>
+            <div className="grid2">
+              <label className="f">Supplier name<input type="text" value={newSupplier.name} onChange={(e) => setNewSupplier({ ...newSupplier, name: e.target.value })} /></label>
+              <label className="f">Website (optional)<input type="text" value={newSupplier.website} onChange={(e) => setNewSupplier({ ...newSupplier, website: e.target.value })} /></label>
+            </div>
+            <label className="row small"><input type="checkbox" checked={newSupplier.shared} onChange={(e) => setNewSupplier({ ...newSupplier, shared: e.target.checked })} /> Shared supplier (other stores can pick it)</label>
+            <div className="row"><button type="button" className="sm primary" onClick={createSupplier}>Add supplier</button><button type="button" className="sm ghost" onClick={() => setNewSupplier({ ...newSupplier, open: false })}>Cancel</button></div>
+          </div>
+        )}
+        <div className="grid3">
+          <label className="f">Finish<input type="text" value={form.finish} onChange={(e) => setForm({ ...form, finish: e.target.value })} placeholder="matte / polished" /></label>
+          <label className="f">Colour family<input type="text" value={form.colour_family} onChange={(e) => setForm({ ...form, colour_family: e.target.value })} placeholder="grey, warm oak…" /></label>
+          <label className="f">Collection<input type="text" value={form.collection} onChange={(e) => setForm({ ...form, collection: e.target.value })} /></label>
+        </div>
+        <div className="grid2">
           <label className="f">Type
             <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value, length: e.target.value === "tile" ? "24" : "48", width: e.target.value === "tile" ? "12" : "7" })}>
               <option value="plank">Plank (LVP / laminate / hardwood)</option><option value="tile">Tile</option><option value="carpet">Carpet</option><option value="other">Other</option>
@@ -180,6 +286,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
         )}
         <p className="small muted">Best input: a flatbed scan at 600 dpi, or a straight-down daylight photo with the sample filling the frame. The capture score tells staff if it's good enough.</p>
         <label className="f">Notes (optional)<textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Colour family, finish, where it's stocked…" /></label>
+        {form.supplier_id && form.sku && <label className="row small"><input type="checkbox" checked={form.share} onChange={(e) => setForm({ ...form, share: e.target.checked })} /> Add this SKU to the shared supplier catalog (no prices are shared)</label>}
         <button className="primary" disabled={busy}>{busy ? <span className="spinner" /> : "Save product"}</button>
         {err && <p className="warn small">{err}</p>}
       </form>
@@ -196,19 +303,48 @@ export default function Products({ ctx }: { ctx: Ctx }) {
           </label>
           {importMsg && <span className="small">{importMsg}</span>}
         </div>
+        {editing && (
+          <form className="card" style={{ background: "var(--bg)" }} onSubmit={saveEdit}>
+            <div className="row" style={{ justifyContent: "space-between" }}><strong>Edit · {editing.name}</strong><button type="button" className="sm ghost" onClick={() => setEditing(null)}>Close</button></div>
+            <div className="grid2">
+              <label className="f">Name<input type="text" required value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} /></label>
+              <label className="f">Supplier SKU<input type="text" value={editForm.sku} onChange={(e) => setEditForm({ ...editForm, sku: e.target.value })} /></label>
+            </div>
+            <div className="grid2">
+              <label className="f">Supplier<select value={editForm.supplier_id} onChange={(e) => setEditForm({ ...editForm, supplier_id: e.target.value })}><option value="">— none —</option>{suppliers.map((su) => <option key={su.id} value={su.id}>{su.name}</option>)}</select></label>
+              <label className="f">Type<select value={editForm.type} onChange={(e) => setEditForm({ ...editForm, type: e.target.value })}>{TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select></label>
+            </div>
+            <div className="grid3">
+              <label className="f">Length / long side (in)<input type="number" step="0.01" min="0" value={editForm.length} onChange={(e) => setEditForm({ ...editForm, length: e.target.value })} /></label>
+              <label className="f">Width / short side (in)<input type="number" step="0.01" min="0" value={editForm.width} onChange={(e) => setEditForm({ ...editForm, width: e.target.value })} /></label>
+              <label className="f">$/sq ft<input type="number" step="0.01" min="0" value={editForm.price} onChange={(e) => setEditForm({ ...editForm, price: e.target.value })} /></label>
+            </div>
+            <div className="grid2">
+              <label className="f">Finish<input type="text" value={editForm.finish} onChange={(e) => setEditForm({ ...editForm, finish: e.target.value })} /></label>
+              <label className="f">Notes<input type="text" value={editForm.notes} onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })} /></label>
+            </div>
+            <div className="row">
+              <button className="primary sm">Save changes</button>
+              {editForm.supplier_id && editForm.sku && <button type="button" className="sm" onClick={async () => { await shareToCatalog({ ...editing, supplier_id: editForm.supplier_id, sku: editForm.sku, name: editForm.name, finish: editForm.finish } as Product); ctx.toast("Added to the supplier catalog."); }}>Share to supplier catalog</button>}
+              {editMsg && <span className="warn small">{editMsg}</span>}
+            </div>
+            <p className="small muted">To replace the swatch image, add the product again with the new scan and hide this one.</p>
+          </form>
+        )}
         {!shown.length && <p className="muted">No products yet. Add the 5–10 you sell most.</p>}
         {shown.length > 0 && (
           <div className="table-wrap"><table>
-            <thead><tr><th></th><th>Name</th><th>Type</th><th className="num">Size (in)</th><th className="num">$/sq ft</th><th></th></tr></thead>
+            <thead><tr><th></th><th>Name</th><th>Supplier</th><th className="num">Size (in)</th><th className="num">$/sq ft</th><th></th></tr></thead>
             <tbody>
               {shown.map((p) => (
                 <tr key={p.id} style={{ opacity: p.active ? 1 : 0.55 }}>
                   <td><img className="thumb" src={urls[p.id]} alt="" /></td>
-                  <td><strong>{p.name}</strong>{p.sku && <div className="small muted mono">{p.sku}</div>}</td>
-                  <td>{p.type}</td>
+                  <td><strong>{p.name}</strong><div className="small muted">{p.type}{p.sku ? <span className="mono"> · {p.sku}</span> : null}{p.finish ? ` · ${p.finish}` : ""}</div></td>
+                  <td className="small">{suppliers.find((su) => su.id === p.supplier_id)?.name ?? "—"}</td>
                   <td className="num">{p.length_in && p.width_in ? `${p.length_in} × ${p.width_in}` : "—"}</td>
                   <td className="num">{p.price_per_sqft ?? "—"}</td>
                   <td className="row" style={{ justifyContent: "flex-end" }}>
+                    <button className="sm" onClick={() => startEdit(p)}>Edit</button>
                     <button className="sm" onClick={() => toggle(p)}>{p.active ? "Hide" : "Show"}</button>
                     {isOwner && <button className="sm ghost" onClick={() => remove(p)}>Delete</button>}
                   </td>

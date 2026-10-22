@@ -9,7 +9,10 @@ export const supabase = createClient(url ?? "https://placeholder.supabase.co", k
 /** Where stores go to buy credits until Stripe is wired. */
 export const SALES_CONTACT = "mybuilderagency@gmail.com";
 
-export type Store = { id: string; name: string; city: string | null };
+export type Store = {
+  id: string; name: string; city: string | null; phone?: string | null; email?: string | null; address?: string | null; website?: string | null;
+  tagline?: string | null; cta_text?: string | null; brand_color?: string | null; logo_path?: string | null;
+};
 export type Membership = { store_id: string; role: "owner" | "staff"; stores: Store };
 export type Product = {
   id: string; store_id: string; name: string; sku: string | null; type: "plank" | "tile" | "carpet" | "other";

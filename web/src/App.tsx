@@ -1,23 +1,29 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase, configured, type Membership } from "./lib/supabase";
+import type { ProposalItem } from "./lib/pdf";
 import Login from "./pages/Login";
 import Onboard from "./pages/Onboard";
 import Generate from "./pages/Generate";
 import Products from "./pages/Products";
+import Proposal from "./pages/Proposal";
 import Credits from "./pages/Credits";
 import Team from "./pages/Team";
 import Admin from "./pages/Admin";
 
-type Tab = "generate" | "products" | "credits" | "team" | "admin";
+type Tab = "generate" | "proposal" | "products" | "credits" | "team" | "admin";
 
 export type Ctx = {
   session: Session;
   membership: Membership;
   balance: number | null;
   refreshBalance: () => Promise<void>;
+  reloadStore: () => Promise<void>;
   toast: (msg: string) => void;
   isAdmin: boolean;
+  proposal: ProposalItem[];
+  setProposal: (fn: (cur: ProposalItem[]) => ProposalItem[]) => void;
+  goTo: (tab: Tab) => void;
 };
 
 export default function App() {
@@ -28,8 +34,10 @@ export default function App() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [tab, setTab] = useState<Tab>("generate");
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [proposal, setProposalState] = useState<ProposalItem[]>([]);
 
   const toast = useCallback((msg: string) => { setToastMsg(msg); window.setTimeout(() => setToastMsg(null), 3200); }, []);
+  const setProposal = useCallback((fn: (cur: ProposalItem[]) => ProposalItem[]) => setProposalState((cur) => fn(cur)), []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -40,7 +48,7 @@ export default function App() {
   const loadMemberships = useCallback(async () => {
     if (!session) return;
     await supabase.rpc("accept_invites").then(() => undefined, () => undefined);
-    const { data } = await supabase.from("store_members").select("store_id, role, stores(id, name, city)").order("created_at");
+    const { data } = await supabase.from("store_members").select("store_id, role, stores(*)").order("created_at");
     const list = (data ?? []) as unknown as Membership[];
     setMemberships(list);
     setStoreId((cur) => cur && list.some((m) => m.store_id === cur) ? cur : (list[0]?.store_id ?? null));
@@ -55,7 +63,7 @@ export default function App() {
     const { data } = await supabase.rpc("store_balance", { p_store: storeId });
     setBalance(typeof data === "number" ? data : null);
   }, [storeId]);
-  useEffect(() => { refreshBalance(); }, [refreshBalance]);
+  useEffect(() => { refreshBalance(); setProposalState([]); }, [refreshBalance]);
 
   if (!configured) return <div className="page"><div className="card"><h2>Setup</h2><p>Missing <span className="mono">VITE_SUPABASE_URL</span> / <span className="mono">VITE_SUPABASE_KEY</span>. Add them to the Netlify environment and redeploy.</p></div></div>;
   if (session === undefined) return <div className="page"><p className="muted">Loading…</p></div>;
@@ -65,8 +73,8 @@ export default function App() {
   const membership = memberships.find((m) => m.store_id === storeId) ?? null;
   if (!membership) return <Onboard onDone={loadMemberships} toast={toast} email={session.user.email ?? ""} />;
 
-  const ctx: Ctx = { session, membership, balance, refreshBalance, toast, isAdmin };
-  const tabs: [Tab, string][] = [["generate", "Generate"], ["products", "Products"], ["credits", "Credits"], ["team", "Team"]];
+  const ctx: Ctx = { session, membership, balance, refreshBalance, reloadStore: loadMemberships, toast, isAdmin, proposal, setProposal, goTo: setTab };
+  const tabs: [Tab, string][] = [["generate", "Generate"], ["proposal", proposal.length ? `Proposal (${proposal.length})` : "Proposal"], ["products", "Products"], ["credits", "Credits"], ["team", "Store & team"]];
   if (isAdmin) tabs.push(["admin", "Admin"]);
 
   return (
@@ -87,6 +95,7 @@ export default function App() {
       </header>
       <main className="page">
         {tab === "generate" && <Generate ctx={ctx} />}
+        {tab === "proposal" && <Proposal ctx={ctx} />}
         {tab === "products" && <Products ctx={ctx} />}
         {tab === "credits" && <Credits ctx={ctx} />}
         {tab === "team" && <Team ctx={ctx} />}

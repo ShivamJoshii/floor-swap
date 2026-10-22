@@ -1,5 +1,5 @@
 // Floor Swap — generate: room photo + product swatch -> N rendered options via fal.
-// Charges prepaid credits atomically; refunds on provider failure.
+// Charges prepaid credits atomically; refunds if every attempt fails.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -17,32 +17,48 @@ const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
 type Options = { direction?: string; pattern?: string; extra?: string };
+type FalImage = { url: string; width?: number; height?: number; content_type?: string };
 
 function buildPrompt(p: { name: string; type: string; length_in: number | null; width_in: number | null }, o: Options) {
-  const dims = p.length_in && p.width_in ? `${p.length_in} by ${p.width_in} inch` : "";
-  const unit = p.type === "tile" ? `${dims} tiles` : p.type === "carpet" ? "carpet" : `${dims} planks`;
+  const dims = p.length_in && p.width_in ? ` (${p.length_in}" x ${p.width_in}")` : "";
+  const what = p.type === "tile" ? `tiles${dims}` : p.type === "carpet" ? "carpet" : `planks${dims}`;
   const dir: Record<string, string> = {
-    along: "running front-to-back, away from the camera",
-    across: "running left-to-right across the room",
-    diagonal: "laid diagonally at 45 degrees",
+    along: ", running away from the camera",
+    across: ", running left to right",
+    diagonal: ", laid diagonally",
   };
   const pat: Record<string, string> = {
-    straight: "in a straight staggered layout",
-    herringbone: "in a herringbone layout",
-    grid: "in a straight grid with thin grout lines",
-    offset: "in an offset brick layout with thin grout lines",
+    straight: " in a staggered layout",
+    herringbone: " in a herringbone layout",
+    grid: " in a straight grid with thin grout lines",
+    offset: " in an offset brick layout with thin grout lines",
   };
-  const parts = [
-    "Edit the FIRST image. Replace only the existing floor with the flooring product shown in the SECOND image.",
-    `The product is ${p.name}: ${unit}${p.type === "carpet" ? "" : " at realistic scale, correct perspective, plank edges visible"}`,
-    o.pattern && pat[o.pattern] ? pat[o.pattern] : "",
-    o.direction && dir[o.direction] ? dir[o.direction] : "",
-    "Match the product's exact colour, grain and pattern from the second image. Do not invent a different wood tone.",
-    "Keep everything else identical: walls, furniture, rugs on top of the floor, doors, trim, lighting, shadows, reflections, camera angle and framing.",
-    "Photorealistic, same resolution and aspect ratio as the first image.",
-    o.extra ?? "",
-  ].filter(Boolean);
-  return parts.join(" ");
+  const layout = p.type === "carpet" ? "" : `${pat[o.pattern ?? ""] ?? ""}${dir[o.direction ?? ""] ?? ""}`;
+  return `Replace the floor in the first photo with the flooring shown in the second photo (${p.name}, ${what}${layout}). ` +
+    `Keep the exact colour and pattern of the second photo. Keep the walls, furniture, lighting, shadows, camera angle and framing of the first photo unchanged. Photorealistic.` +
+    (o.extra ? ` ${o.extra}` : "");
+}
+
+async function falEdit(model: string, prompt: string, imageUrls: string[], timeoutMs = 120_000): Promise<{ ok: true; image: FalImage } | { ok: false; error: string }> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(`https://fal.run/${model}`, {
+      method: "POST",
+      headers: { Authorization: `Key ${FAL_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, image_urls: imageUrls, num_images: 1, output_format: "jpeg" }),
+      signal: ctrl.signal,
+    });
+    const text = await res.text();
+    if (!res.ok) return { ok: false, error: `${model} ${res.status}: ${text.slice(0, 600)}` };
+    const out = JSON.parse(text) as { images?: FalImage[] };
+    const img = out.images?.[0];
+    if (!img?.url) return { ok: false, error: `${model}: no image in response` };
+    return { ok: true, image: img };
+  } catch (e) {
+    const name = e instanceof Error ? e.name : "";
+    return { ok: false, error: name === "AbortError" ? `${model}: timed out` : `${model}: ${String(e)}` };
+  } finally { clearTimeout(timer); }
 }
 
 Deno.serve(async (req: Request) => {
@@ -74,6 +90,7 @@ Deno.serve(async (req: Request) => {
   const settings: Record<string, unknown> = {};
   for (const r of settingsRows ?? []) settings[r.key] = r.value;
   const model = String(settings.model ?? "fal-ai/nano-banana-2/edit");
+  const fallback = settings.fallback_model ? String(settings.fallback_model) : null;
   const numImages = Math.min(4, Math.max(1, Number(settings.images_per_generation ?? 3)));
   const credits = Math.max(1, Number(settings.credits_per_generation ?? 1));
   const costPerImage = Number(settings.provider_cost_cents_per_image ?? 0);
@@ -95,8 +112,9 @@ Deno.serve(async (req: Request) => {
   }
 
   const fail = async (msg: string, status = 502) => {
+    console.error("render failed", render.id, msg);
     await svc.from("credit_ledger").insert({ store_id: body.store_id, delta: credits, reason: "refund", render_id: render.id, note: msg.slice(0, 200) });
-    await svc.from("renders").update({ status: "failed", error: msg.slice(0, 1000), finished_at: new Date().toISOString() }).eq("id", render.id);
+    await svc.from("renders").update({ status: "failed", error: msg.slice(0, 2000), finished_at: new Date().toISOString() }).eq("id", render.id);
     return json({ error: msg, render_id: render.id, refunded: true }, status);
   };
 
@@ -107,39 +125,47 @@ Deno.serve(async (req: Request) => {
     ]);
     if (room.error || !room.data) return await fail("Room photo not found in storage.", 400);
     if (swatch.error || !swatch.data) return await fail("Swatch photo not found in storage.", 400);
+    const urls = [room.data.signedUrl, swatch.data.signedUrl];
 
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 140_000);
-    const res = await fetch(`https://fal.run/${model}`, {
-      method: "POST",
-      headers: { Authorization: `Key ${FAL_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, image_urls: [room.data.signedUrl, swatch.data.signedUrl], num_images: numImages, output_format: "jpeg" }),
-      signal: ctrl.signal,
-    }).finally(() => clearTimeout(timer));
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      return await fail(`Image provider error ${res.status}: ${text.slice(0, 300)}`);
+    // Make sure the provider will be able to fetch both images.
+    for (const [label, u] of [["room photo", urls[0]], ["swatch", urls[1]]] as const) {
+      const head = await fetch(u, { method: "HEAD" }).catch(() => null);
+      if (!head || !head.ok) return await fail(`The ${label} could not be fetched from storage (${head?.status ?? "no response"}).`, 500);
+      const ct = head.headers.get("content-type") ?? "";
+      if (!/^image\/(jpeg|png|webp)/.test(ct)) return await fail(`The ${label} is ${ct || "an unknown type"}; use a JPG, PNG or WebP (iPhone HEIC photos need converting).`, 400);
     }
-    const out = await res.json() as { images?: { url: string; width?: number; height?: number; content_type?: string }[] };
-    const images = out.images ?? [];
-    if (!images.length) return await fail("Image provider returned no images.");
 
-    const outputs: { path: string; width?: number; height?: number }[] = [];
-    for (let i = 0; i < images.length; i++) {
-      const img = images[i];
-      const r = await fetch(img.url);
+    // N independent single-image attempts in parallel; each falls back to the second model on failure.
+    const attempt = async (): Promise<{ ok: true; image: FalImage; model: string } | { ok: false; error: string }> => {
+      const a = await falEdit(model, prompt, urls);
+      if (a.ok) return { ...a, model };
+      console.warn("primary failed", a.error);
+      if (!fallback || fallback === model) return a;
+      const b = await falEdit(fallback, prompt, urls);
+      return b.ok ? { ...b, model: fallback } : { ok: false, error: `${a.error} | ${b.error}` };
+    };
+    const results = await Promise.all(Array.from({ length: numImages }, attempt));
+    const good = results.filter((r): r is { ok: true; image: FalImage; model: string } => r.ok);
+    const errors = results.filter((r): r is { ok: false; error: string } => !r.ok).map((r) => r.error);
+    if (!good.length) return await fail(`Image provider could not render this photo. ${errors[0] ?? ""}`.trim());
+
+    const outputs: { path: string; width?: number; height?: number; model?: string }[] = [];
+    for (let i = 0; i < good.length; i++) {
+      const g = good[i];
+      const r = await fetch(g.image.url);
       if (!r.ok) continue;
       const buf = new Uint8Array(await r.arrayBuffer());
-      const ct = img.content_type ?? r.headers.get("content-type") ?? "image/jpeg";
+      const ct = g.image.content_type ?? r.headers.get("content-type") ?? "image/jpeg";
       const ext = ct.includes("png") ? "png" : ct.includes("webp") ? "webp" : "jpg";
       const path = `${body.store_id}/${render.id}/${i + 1}.${ext}`;
       const up = await svc.storage.from("renders").upload(path, buf, { contentType: ct, upsert: true });
-      if (!up.error) outputs.push({ path, width: img.width, height: img.height });
+      if (!up.error) outputs.push({ path, width: g.image.width, height: g.image.height, model: g.model });
     }
     if (!outputs.length) return await fail("Could not store the generated images.");
 
     await svc.from("renders").update({
-      status: "done", outputs, provider_cost_cents: costPerImage * images.length, finished_at: new Date().toISOString(),
+      status: "done", outputs, provider_cost_cents: costPerImage * good.length, finished_at: new Date().toISOString(),
+      error: errors.length ? `${errors.length} of ${numImages} attempts failed: ${errors[0].slice(0, 300)}` : null,
     }).eq("id", render.id);
 
     const signed = await Promise.all(outputs.map((o) => svc.storage.from("renders").createSignedUrl(o.path, 3600)));
@@ -147,10 +173,10 @@ Deno.serve(async (req: Request) => {
     return json({
       render_id: render.id,
       outputs: outputs.map((o, i) => ({ ...o, url: signed[i].data?.signedUrl ?? null })),
+      partial: errors.length ? `${good.length} of ${numImages} options rendered.` : null,
       balance: balance.data ?? null,
     });
   } catch (e) {
-    const msg = e instanceof Error ? (e.name === "AbortError" ? "Image provider timed out (140 s)." : e.message) : String(e);
-    return await fail(msg);
+    return await fail(e instanceof Error ? e.message : String(e));
   }
 });

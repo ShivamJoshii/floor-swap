@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase, shrinkImage, signedUrl, type Product, type Render } from "../lib/supabase";
 import type { Ctx } from "../App";
+import type { ProposalItem } from "../lib/pdf";
 
 type Output = { path: string; url: string | null };
 
@@ -24,7 +25,7 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
   const [lead, setLead] = useState({ name: "", phone: "" });
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [results, setResults] = useState<{ before: string | null; outputs: Output[]; productName: string } | null>(null);
+  const [results, setResults] = useState<{ before: string | null; outputs: Output[]; product: Product; renderId: string; roomPath: string } | null>(null);
   const [history, setHistory] = useState<(Render & { thumb: string | null; product?: { name: string } | null })[]>([]);
   const [zoom, setZoom] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -84,8 +85,8 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
         throw new Error(msg);
       }
       const before = await signedUrl("rooms", roomPath);
-      setResults({ before, outputs: (data.outputs ?? []) as Output[], productName: product.name });
-      ctx.toast("Done. Pick the best one and send it.");
+      setResults({ before, outputs: (data.outputs ?? []) as Output[], product, renderId: data.render_id, roomPath });
+      ctx.toast(data.partial ? `${data.partial} Pick the best one.` : "Done. Pick the best one and send it.");
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -98,7 +99,9 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
       signedUrl("rooms", r.room_path),
       ...r.outputs.map((o) => signedUrl("renders", o.path)),
     ]);
-    setResults({ before, outputs: r.outputs.map((o, i) => ({ path: o.path, url: outs[i] })), productName: r.product?.name ?? "render" });
+    const prod = products.find((p) => p.id === r.product_id) ?? (r.product_id ? ((await supabase.from("products").select("*").eq("id", r.product_id).maybeSingle()).data as Product | null) : null);
+    if (!prod) { ctx.toast("That product no longer exists."); return; }
+    setResults({ before, outputs: r.outputs.map((o, i) => ({ path: o.path, url: outs[i] })), product: prod, renderId: r.id, roomPath: r.room_path });
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -122,6 +125,15 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
   }
 
   const safe = (s: string) => s.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-").slice(0, 40) || "floor";
+  const inProposal = (path: string) => ctx.proposal.some((it) => it.output_path === path);
+  function toggleProposal(o: Output) {
+    if (!results || !o.url) return;
+    if (inProposal(o.path)) { ctx.setProposal((cur) => cur.filter((it) => it.output_path !== o.path)); return; }
+    const { product, renderId, roomPath } = results;
+    const item: ProposalItem = { render_id: renderId, output_path: o.path, url: o.url, room_path: roomPath, swatchUrl: swatchUrls[product.id] ?? null,
+      product: { id: product.id, name: product.name, type: product.type, length_in: product.length_in, width_in: product.width_in, swatch_path: product.swatch_path } };
+    ctx.setProposal((cur) => [...cur, item]); ctx.toast(`Added to proposal (${ctx.proposal.length + 1}).`);
+  }
   const noCredits = ctx.balance !== null && ctx.balance <= 0;
 
   return (
@@ -186,7 +198,7 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
 
       <div style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>
         <div className="card">
-          <h2>{results ? `Options · ${results.productName}` : "Options"}</h2>
+          <h2>{results ? `Options · ${results.product.name}` : "Options"}</h2>
           {!results && <p className="muted">Your 3 options show up here. Click any to enlarge, then download or copy to text it.</p>}
           {results && (
             <div className="results">
@@ -201,7 +213,8 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
                   {o.url ? <img src={o.url} alt={`Option ${i + 1}`} onClick={() => setZoom(o.url)} style={{ cursor: "zoom-in" }} /> : <div className="muted" style={{ padding: 20 }}>Image unavailable</div>}
                   <div className="bar">
                     <span className="small muted grow">Option {i + 1}</span>
-                    {o.url && <button className="sm" onClick={() => download(o.url!, `${safe(results.productName)}-option-${i + 1}.jpg`)}>Download</button>}
+                    {o.url && <button className={"sm" + (inProposal(o.path) ? " on" : "")} onClick={() => toggleProposal(o)}>{inProposal(o.path) ? "In proposal ✓" : "+ Proposal"}</button>}
+                    {o.url && <button className="sm" onClick={() => download(o.url!, `${safe(results.product.name)}-option-${i + 1}.jpg`)}>Download</button>}
                     {o.url && <button className="sm" onClick={() => copy(o.url!)}>Copy</button>}
                   </div>
                 </div>

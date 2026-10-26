@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase, shrinkImage, signedUrl, type Product, type Render } from "../lib/supabase";
 import type { Ctx } from "../App";
 import type { ProposalItem } from "../lib/pdf";
+import { watermark } from "../lib/image";
 import ProductFilter, { applyFilters, emptyFilters, type Filters } from "../components/ProductFilter";
 import type { Supplier } from "../lib/supabase";
 
@@ -131,7 +132,7 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  async function fetchBlob(url: string) { const r = await fetch(url); if (!r.ok) throw new Error("Could not fetch image."); return await r.blob(); }
+  async function fetchBlob(url: string) { const r = await fetch(url); if (!r.ok) throw new Error("Could not fetch image."); const b = await r.blob(); return ctx.watermark ? await watermark(b) : b; }
   async function download(url: string, name: string) {
     try {
       const b = await fetchBlob(url); const a = document.createElement("a");
@@ -160,7 +161,7 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
       product: { id: product.id, name: product.name, type: product.type, length_in: product.length_in, width_in: product.width_in, swatch_path: product.swatch_path } };
     ctx.setProposal((cur) => [...cur, item]); ctx.toast(`Added to proposal (${ctx.proposal.length + 1}).`);
   }
-  const noCredits = ctx.balance !== null && ctx.balance <= 0;
+  const noCredits = ctx.balance !== null && ctx.balance <= 0 && !ctx.hasAllowance;
 
   return (
     <div className="two">
@@ -231,10 +232,10 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
           <span className="small muted">1 is usually enough; more options cost the same credit but take longer.</span>
         </div>
         <button className="primary big" disabled={!file || !product || !!busy || noCredits} onClick={generate}>
-          {busy ? <><span className="spinner" /> {busy}</> : noCredits ? "No credits left" : `Generate ${nOpts} option${nOpts === 1 ? "" : "s"} on the ${SURFACE_OPTS.find((o) => o[0] === surface)?.[1].toLowerCase()} · 1 credit`}
+          {busy ? <><span className="spinner" /> {busy}</> : noCredits ? "No renders left" : `Generate ${nOpts} option${nOpts === 1 ? "" : "s"} on the ${SURFACE_OPTS.find((o) => o[0] === surface)?.[1].toLowerCase()} · 1 credit`}
         </button>
         {err && <p className="warn small">{err}</p>}
-        {noCredits && <p className="small muted">Top up under Credits.</p>}
+        {noCredits && <p className="small muted">Pick a plan or add a top-up under Billing.</p>}
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>

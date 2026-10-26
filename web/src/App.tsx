@@ -17,6 +17,8 @@ export type Ctx = {
   session: Session;
   membership: Membership;
   balance: number | null;
+  hasAllowance: boolean;
+  watermark: boolean;
   refreshBalance: () => Promise<void>;
   reloadStore: () => Promise<void>;
   toast: (msg: string) => void;
@@ -31,6 +33,7 @@ export default function App() {
   const [memberships, setMemberships] = useState<Membership[] | null>(null);
   const [storeId, setStoreId] = useState<string | null>(null);
   const [balance, setBalance] = useState<number | null>(null);
+  const [usage, setUsage] = useState<{ plan_status: string; renders_per_month: number; used_this_period: number; credits: number | null; watermark?: boolean } | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [tab, setTab] = useState<Tab>("generate");
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -60,8 +63,9 @@ export default function App() {
 
   const refreshBalance = useCallback(async () => {
     if (!storeId) return;
-    const { data } = await supabase.rpc("store_balance", { p_store: storeId });
+    const [{ data }, { data: u }] = await Promise.all([supabase.rpc("store_balance", { p_store: storeId }), supabase.rpc("store_usage", { p_store: storeId })]);
     setBalance(typeof data === "number" ? data : null);
+    const row = Array.isArray(u) ? u[0] : u; setUsage(row ?? null);
   }, [storeId]);
   useEffect(() => { refreshBalance(); setProposalState([]); }, [refreshBalance]);
 
@@ -73,8 +77,8 @@ export default function App() {
   const membership = memberships.find((m) => m.store_id === storeId) ?? null;
   if (!membership) return <Onboard onDone={loadMemberships} toast={toast} email={session.user.email ?? ""} />;
 
-  const ctx: Ctx = { session, membership, balance, refreshBalance, reloadStore: loadMemberships, toast, isAdmin, proposal, setProposal, goTo: setTab };
-  const tabs: [Tab, string][] = [["generate", "Generate"], ["proposal", proposal.length ? `Proposal (${proposal.length})` : "Proposal"], ["products", "Products"], ["credits", "Credits"], ["team", "Store & team"]];
+  const ctx: Ctx = { session, membership, balance, hasAllowance: !!(usage && usage.plan_status === "active" && usage.used_this_period < usage.renders_per_month), watermark: !!usage?.watermark, refreshBalance, reloadStore: loadMemberships, toast, isAdmin, proposal, setProposal, goTo: setTab };
+  const tabs: [Tab, string][] = [["generate", "Generate"], ["proposal", proposal.length ? `Proposal (${proposal.length})` : "Proposal"], ["products", "Products"], ["credits", "Billing"], ["team", "Store & team"]];
   if (isAdmin) tabs.push(["admin", "Admin"]);
 
   return (
@@ -88,7 +92,9 @@ export default function App() {
         ) : <span className="muted">{membership.stores.name}</span>}
         <nav>{tabs.map(([t, l]) => <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>{l}</button>)}</nav>
         <div className="right">
-          <span className={"credits-pill" + (balance !== null && balance <= 3 ? " low" : "")} title="Credits left">{balance === null ? "…" : `${balance} credit${balance === 1 ? "" : "s"}`}</span>
+          {usage?.plan_status === "active" && usage.renders_per_month > 0
+            ? <span className={"credits-pill" + (usage.used_this_period >= usage.renders_per_month * 0.9 ? " low" : "")} title="Renders used this month">{usage.used_this_period}/{usage.renders_per_month} this month{balance ? ` · +${balance}` : ""}</span>
+            : <span className={"credits-pill" + (balance !== null && balance <= 3 ? " low" : "")} title="Renders left">{balance === null ? "…" : `${balance} render${balance === 1 ? "" : "s"} left${usage?.plan_status === "trial" ? " · trial" : ""}`}</span>}
           <span className="muted small">{session.user.email}</span>
           <button className="sm ghost" onClick={() => supabase.auth.signOut()}>Sign out</button>
         </div>

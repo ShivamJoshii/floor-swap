@@ -38,7 +38,8 @@ export async function signedUrl(bucket: string, path: string, seconds = 3600) {
 }
 
 export function money(cents: number, currency = "CAD") {
-  return new Intl.NumberFormat("en-CA", { style: "currency", currency }).format(cents / 100);
+  const whole = Math.abs(cents % 100) < 0.5;
+  return new Intl.NumberFormat("en-CA", { style: "currency", currency, minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: 2 }).format(cents / 100);
 }
 
 /** Downscale an image file in the browser before upload (max long side). Returns a JPEG blob. */

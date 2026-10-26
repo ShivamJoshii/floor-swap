@@ -96,6 +96,8 @@ td.num, th.num { text-align: right; font-family: var(--font-mono); font-variant-
 
 .packs { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
 .pack { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 6px; background: var(--bg); }
+.pack > button { margin-top: auto; }
+.packs { align-items: stretch; }
 .pack .price { font-size: 24px; font-weight: 700; font-family: var(--font-mono); }
 .pack.best { border-color: var(--accent); }
 

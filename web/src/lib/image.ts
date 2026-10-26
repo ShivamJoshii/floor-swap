@@ -106,3 +106,19 @@ export function whiteBalance(c: HTMLCanvasElement) {
 }
 
 export const canvasToJpeg = (c: HTMLCanvasElement, q = 0.92) => new Promise<Blob>((res, rej) => c.toBlob((b) => b ? res(b) : rej(new Error("encode failed")), "image/jpeg", q));
+
+/** Stamp a diagonal "Floor Swap · trial" watermark. Used only for stores on the free trial. */
+export async function watermark(blob: Blob, text = "FLOOR SWAP · FREE TRIAL"): Promise<Blob> {
+  const bmp = await createImageBitmap(blob);
+  const c = document.createElement("canvas"); c.width = bmp.width; c.height = bmp.height;
+  const g = c.getContext("2d")!; g.drawImage(bmp, 0, 0);
+  const size = Math.round(Math.max(bmp.width, bmp.height) / 14);
+  g.font = `700 ${size}px system-ui, sans-serif`; g.textAlign = "center"; g.textBaseline = "middle";
+  g.translate(bmp.width / 2, bmp.height / 2); g.rotate(-Math.PI / 7);
+  const step = size * 3.2;
+  for (let y = -bmp.height; y < bmp.height; y += step) for (let x = -bmp.width; x < bmp.width; x += size * 9) {
+    g.fillStyle = "rgba(255,255,255,0.28)"; g.fillText(text, x, y);
+    g.strokeStyle = "rgba(0,0,0,0.18)"; g.lineWidth = Math.max(1, size / 24); g.strokeText(text, x, y);
+  }
+  return await new Promise<Blob>((res, rej) => c.toBlob((b) => b ? res(b) : rej(new Error("encode")), "image/jpeg", 0.9));
+}

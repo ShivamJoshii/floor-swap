@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase, signedUrl } from "../lib/supabase";
 import { buildProposalPdf } from "../lib/pdf";
+import { watermark } from "../lib/image";
 import type { Ctx } from "../App";
 
 type Row = { id: string; lead_name: string | null; lead_phone: string | null; items: { product: { name: string } }[]; pdf_path: string | null; created_at: string };
@@ -38,7 +39,7 @@ export default function Proposal({ ctx }: { ctx: Ctx }) {
       // Fresh signed URLs: the ones in memory may be close to expiry.
       const fresh = await Promise.all(items.map(async (it) => ({
         ...it,
-        url: (await signedUrl("renders", it.output_path)) ?? it.url,
+        url: ctx.watermark ? URL.createObjectURL(await watermark(await (await fetch((await signedUrl("renders", it.output_path)) ?? it.url)).blob())) : ((await signedUrl("renders", it.output_path)) ?? it.url),
         swatchUrl: await signedUrl("swatches", it.product.swatch_path),
       })));
       const beforeUrl = await signedUrl("rooms", items[0].room_path);

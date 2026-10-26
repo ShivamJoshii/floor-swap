@@ -103,7 +103,7 @@ export default function Proposal({ ctx }: { ctx: Ctx }) {
         <button className="primary big" disabled={!items.length || !!busy} onClick={build}>{busy ? <><span className="spinner" /> {busy}</> : "Build PDF"}</button>
         {err && <p className="warn small">{err}</p>}
         {done && (
-          <div className="card" style={{ background: "var(--bg)" }}>
+          <div className="card" style={{ background: "var(--color-canvas)" }}>
             <strong>{done.name}</strong>
             <div className="row">
               <button className="primary" onClick={() => download(done.blob, done.name)}>Download PDF</button>

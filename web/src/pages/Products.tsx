@@ -290,7 +290,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
           <input type="text" value={catQ} onChange={(e) => setCatQ(e.target.value)} placeholder="Type a product name or SKU…" />
         </label>
         {catHits.length > 0 && (
-          <div className="card" style={{ background: "var(--bg)", padding: 8, gap: 4 }}>
+          <div className="card" style={{ background: "var(--color-canvas)", padding: 8, gap: 4 }}>
             {catHits.map((h) => (
               <button type="button" key={h.id} className="sm" style={{ textAlign: "left", display: "flex", gap: 8, justifyContent: "space-between" }} onClick={() => useCatalogItem(h)}>
                 <span><strong>{h.name}</strong> <span className="muted mono small">{h.sku}</span></span>
@@ -311,7 +311,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
           <label className="f">Supplier SKU<input type="text" value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} placeholder="e.g. FBK652" /></label>
         </div>
         {newSupplier.open && (
-          <div className="card" style={{ background: "var(--bg)" }}>
+          <div className="card" style={{ background: "var(--color-canvas)" }}>
             <div className="grid2">
               <label className="f">Supplier name<input type="text" value={newSupplier.name} onChange={(e) => setNewSupplier({ ...newSupplier, name: e.target.value })} /></label>
               <label className="f">Website (optional)<input type="text" value={newSupplier.website} onChange={(e) => setNewSupplier({ ...newSupplier, website: e.target.value })} /></label>
@@ -350,14 +350,14 @@ export default function Products({ ctx }: { ctx: Ctx }) {
             <div className="row">
               <button type="button" className="sm" onClick={swapLongEdge}>Swap long edge</button>
               <label className="row small"><input type="checkbox" checked={wb} onChange={(e) => setWb(e.target.checked)} /> Neutralize colour cast</label>
-              {quality && <span className={"pill small"} style={{ background: quality.score >= 70 ? "#d8eadf" : quality.score >= 40 ? "var(--accent-soft)" : "#f6d9cf" }}>Capture {quality.score}/100 · {quality.width}×{quality.height}</span>}
+              {quality && <span className={"status " + (quality.score >= 70 ? "done" : quality.score >= 40 ? "" : "failed")}>Capture {quality.score}/100 · {quality.width}×{quality.height}</span>}
             </div>
             {quality?.warnings.map((w) => <p key={w} className="small warn">{w}</p>)}
             <p className="small muted">Drag the dots to the edges of one plank or tile. Top edge = long edge. Straighter crop, better render.</p>
           </div>
         )}
         <p className="small muted">Best input: a flatbed scan at 600 dpi, or a straight-down daylight photo with the sample filling the frame. The capture score tells staff if it's good enough.</p>
-        <div className="card" style={{ background: "var(--bg)", gap: 8 }}>
+        <div className="card" style={{ background: "var(--color-canvas)", gap: 8 }}>
           <span className="small muted">Tags (auto-filled from the swatch and name; adjust if wrong)</span>
           <div className="row" style={{ gap: 4 }}><span className="small muted" style={{ width: 54 }}>Colour</span>
             {HUES.map((h) => <button type="button" key={h} className={"sm" + (form.hue === h ? " on" : "")} style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => setForm({ ...form, hue: h })}>{h}</button>)}
@@ -396,7 +396,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
           {tagMsg && <span className="small">{tagMsg}</span>}
         </div>
         {editing && (
-          <form className="card" style={{ background: "var(--bg)" }} onSubmit={saveEdit}>
+          <form className="card" style={{ background: "var(--color-canvas)" }} onSubmit={saveEdit}>
             <div className="row" style={{ justifyContent: "space-between" }}><strong>Edit · {editing.name}</strong><button type="button" className="sm ghost" onClick={() => setEditing(null)}>Close</button></div>
             <div className="grid2">
               <label className="f">Name<input type="text" required value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} /></label>

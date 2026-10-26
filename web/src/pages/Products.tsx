@@ -176,23 +176,50 @@ export default function Products({ ctx }: { ctx: Ctx }) {
     if (!f) return;
     setImportMsg("Reading file…");
     try {
-      const items = JSON.parse(await f.text()) as { name: string; type?: string; sku?: string | null; notes?: string | null; length_in?: number | null; width_in?: number | null; jpg_b64: string }[];
+      type Item = { name: string; type?: string; sku?: string | null; notes?: string | null; length_in?: number | null; width_in?: number | null; finish?: string | null; collection?: string | null; colour_family?: string | null; supplier?: string | null; jpg_b64: string };
+      const items = JSON.parse(await f.text()) as Item[];
       if (!Array.isArray(items)) throw new Error("Not a catalog file.");
-      const existing = new Set(list.map((p) => p.name.toLowerCase()));
-      let done = 0, skipped = 0; const errors: string[] = [];
-      for (const it of items) {
+      // Resolve / create suppliers named in the file (shared by default).
+      const supMap = new Map<string, string>(suppliers.map((su) => [su.name.toLowerCase(), su.id]));
+      for (const nm of Array.from(new Set(items.map((it) => (it.supplier ?? "").trim()).filter(Boolean)))) {
+        if (supMap.has(nm.toLowerCase())) continue;
+        const { data, error } = await supabase.from("suppliers").insert({ name: nm, store_id: null, created_by: ctx.session.user.id }).select("id").single();
+        if (!error && data) supMap.set(nm.toLowerCase(), data.id);
+        else { const { data: ex } = await supabase.from("suppliers").select("id").ilike("name", nm).limit(1).maybeSingle(); if (ex) supMap.set(nm.toLowerCase(), ex.id); }
+      }
+      const existingNames = new Set(list.map((p) => p.name.toLowerCase()));
+      const existingSkus = new Set(list.filter((p) => p.sku && p.supplier_id).map((p) => `${p.supplier_id}:${p.sku!.toLowerCase()}`));
+      let done = 0, skipped = 0, shared = 0; const errors: string[] = [];
+      for (let idx = 0; idx < items.length; idx++) {
+        const it = items[idx];
         if (!it.name || !it.jpg_b64) { skipped++; continue; }
-        if (existing.has(it.name.toLowerCase())) { skipped++; continue; }
-        setImportMsg(`Importing ${done + 1} of ${items.length}: ${it.name}`);
+        const supplierId = it.supplier ? supMap.get(it.supplier.trim().toLowerCase()) ?? null : null;
+        const dupKey = supplierId && it.sku ? `${supplierId}:${it.sku.toLowerCase()}` : null;
+        if (dupKey ? existingSkus.has(dupKey) : existingNames.has(it.name.toLowerCase())) { skipped++; continue; }
+        setImportMsg(`Importing ${idx + 1} of ${items.length}: ${it.name}`);
         const bytes = Uint8Array.from(atob(it.jpg_b64), (c) => c.charCodeAt(0));
         const id = crypto.randomUUID(); const path = `${store}/${id}.jpg`;
         const up = await supabase.storage.from("swatches").upload(path, bytes, { contentType: "image/jpeg" });
         if (up.error) { errors.push(`${it.name}: ${up.error.message}`); continue; }
-        const type = ["plank", "tile", "carpet", "other"].includes(it.type ?? "") ? it.type : "tile";
-        const { error } = await supabase.from("products").insert({ id, store_id: store, name: it.name, type, sku: it.sku ?? null, notes: it.notes ?? null, length_in: it.length_in ?? null, width_in: it.width_in ?? null, swatch_path: path, created_by: ctx.session.user.id });
-        if (error) errors.push(`${it.name}: ${error.message}`); else done++;
+        const type = (["plank", "tile", "carpet", "other"].includes(it.type ?? "") ? it.type : "tile") as Product["type"];
+        const row = { id, store_id: store, name: it.name, type, sku: it.sku ?? null, notes: it.notes ?? null, length_in: it.length_in ?? null, width_in: it.width_in ?? null,
+          finish: it.finish ?? null, collection: it.collection ?? null, colour_family: it.colour_family ?? null, supplier_id: supplierId, swatch_path: path, created_by: ctx.session.user.id };
+        const { error } = await supabase.from("products").insert(row);
+        if (error) { errors.push(`${it.name}: ${error.message}`); continue; }
+        done++; if (dupKey) existingSkus.add(dupKey); existingNames.add(it.name.toLowerCase());
+        if (supplierId && it.sku) {
+          // Share to the supplier catalog (info + swatch, no price). Skip silently if it already exists.
+          const { data: ex } = await supabase.from("supplier_products").select("id").eq("supplier_id", supplierId).eq("sku", it.sku).maybeSingle();
+          if (!ex) {
+            const cpath = `${ctx.session.user.id}/${crypto.randomUUID()}.jpg`;
+            const cu = await supabase.storage.from("catalog").upload(cpath, bytes, { contentType: "image/jpeg" });
+            const { error: se } = await supabase.from("supplier_products").insert({ supplier_id: supplierId, sku: it.sku, name: it.name, type, length_in: it.length_in ?? null, width_in: it.width_in ?? null,
+              finish: it.finish ?? null, collection: it.collection ?? null, colour_family: it.colour_family ?? null, swatch_path: cu.error ? null : cpath, created_by: ctx.session.user.id });
+            if (!se) shared++;
+          }
+        }
       }
-      setImportMsg(`Imported ${done}${skipped ? `, skipped ${skipped} already there` : ""}${errors.length ? `, ${errors.length} failed: ${errors[0]}` : ""}.`);
+      setImportMsg(`Imported ${done}${shared ? `, ${shared} shared to supplier catalog` : ""}${skipped ? `, skipped ${skipped} already there` : ""}${errors.length ? `, ${errors.length} failed: ${errors[0]}` : ""}.`);
       ctx.toast(`Imported ${done} products.`); load();
     } catch (e) { setImportMsg(e instanceof Error ? e.message : String(e)); }
   }

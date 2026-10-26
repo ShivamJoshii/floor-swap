@@ -17,26 +17,49 @@ const cors = {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
-type Options = { direction?: string; pattern?: string; extra?: string };
+type Options = { direction?: string; pattern?: string; extra?: string; surface?: string; area?: string };
 type FalImage = { url: string; width?: number; height?: number; content_type?: string };
 
 function buildPrompt(p: { name: string; type: string; length_in: number | null; width_in: number | null }, o: Options) {
   const dims = p.length_in && p.width_in ? ` (${p.length_in}" x ${p.width_in}")` : "";
-  const what = p.type === "tile" ? `tiles${dims}` : p.type === "carpet" ? "carpet" : `planks${dims}`;
+  const what = p.type === "tile" ? `tiles${dims}` : p.type === "carpet" ? "carpet" : p.type === "other" ? "mosaic tile" : `planks${dims}`;
   const dir: Record<string, string> = {
     along: ", running away from the camera",
     across: ", running left to right",
     diagonal: ", laid diagonally",
+    vertical: ", laid vertically",
+    horizontal: ", laid horizontally",
   };
   const pat: Record<string, string> = {
     straight: " in a staggered layout",
     herringbone: " in a herringbone layout",
     grid: " in a straight grid with thin grout lines",
     offset: " in an offset brick layout with thin grout lines",
+    stacked: " in a stacked grid with thin grout lines",
   };
   const layout = p.type === "carpet" ? "" : `${pat[o.pattern ?? ""] ?? ""}${dir[o.direction ?? ""] ?? ""}`;
-  return `Replace the floor in the first photo with the flooring shown in the second photo (${p.name}, ${what}${layout}). ` +
-    `Keep the exact colour and pattern of the second photo. Keep the walls, furniture, lighting, shadows, camera angle and framing of the first photo unchanged. Photorealistic.` +
+  const surface = o.surface ?? "floor";
+  const area = (o.area ?? "").trim();
+  const target: Record<string, string> = {
+    floor: "the floor",
+    wall: area ? `the ${area} wall` : "the main wall",
+    backsplash: "the kitchen backsplash (the wall area between the countertop and the upper cabinets)",
+    shower: "the shower walls",
+    fireplace: "the fireplace surround",
+    bathroom_wall: "the bathroom walls",
+  };
+  const keep: Record<string, string> = {
+    floor: "Keep the walls, furniture, lighting, shadows, camera angle and framing of the first photo unchanged.",
+    wall: "Keep the floor, ceiling, furniture, windows, doors, trim, lighting, shadows, camera angle and framing of the first photo unchanged. Do not change any other wall.",
+    backsplash: "Keep the cabinets, countertop, appliances, floor, lighting, shadows, camera angle and framing of the first photo unchanged. Only the backsplash area changes.",
+    shower: "Keep the floor, fixtures, glass, vanity, lighting, camera angle and framing of the first photo unchanged. Only the shower wall surfaces change.",
+    fireplace: "Keep everything else in the first photo unchanged.",
+    bathroom_wall: "Keep the floor, fixtures, vanity, mirror, lighting, camera angle and framing of the first photo unchanged.",
+  };
+  const t = target[surface] ?? target.floor, k = keep[surface] ?? keep.floor;
+  return `Replace ${t} in the first photo with the ${what} shown in the second photo (${p.name}${layout}). ` +
+    `Apply it only to ${t}, covering that surface completely with realistic scale and perspective. ` +
+    `Keep the exact colour and pattern of the second photo. ${k} Photorealistic.` +
     (o.extra ? ` ${o.extra}` : "");
 }
 

@@ -7,18 +7,27 @@ import type { Supplier } from "../lib/supabase";
 
 type Output = { path: string; url: string | null };
 
-const DIRECTIONS: [string, string][] = [["auto", "Auto"], ["along", "Front to back"], ["across", "Left to right"], ["diagonal", "Diagonal"]];
+const SURFACE_OPTS: [string, string, string][] = [
+  ["floor", "Floor", "Replaces the floor"],
+  ["wall", "Wall", "Replaces one wall (say which below)"],
+  ["backsplash", "Backsplash", "Between counter and upper cabinets"],
+  ["shower", "Shower", "Shower wall surfaces"],
+  ["fireplace", "Fireplace", "Fireplace surround"],
+  ["bathroom_wall", "Bathroom walls", "All bathroom wall surfaces"],
+];
+const FLOOR_DIRECTIONS: [string, string][] = [["auto", "Auto"], ["along", "Front to back"], ["across", "Left to right"], ["diagonal", "Diagonal"]];
+const WALL_DIRECTIONS: [string, string][] = [["auto", "Auto"], ["horizontal", "Horizontal"], ["vertical", "Vertical"], ["diagonal", "Diagonal"]];
 const PATTERNS: Record<string, [string, string][]> = {
   plank: [["straight", "Straight"], ["herringbone", "Herringbone"]],
-  tile: [["grid", "Grid"], ["offset", "Offset"]],
-  carpet: [], other: [],
+  tile: [["grid", "Grid"], ["offset", "Offset"], ["stacked", "Stacked"], ["herringbone", "Herringbone"]],
+  carpet: [], other: [["stacked", "Sheet"], ["grid", "Grid"]],
 };
 
 export default function Generate({ ctx }: { ctx: Ctx }) {
   const store = ctx.membership.store_id;
   const [products, setProducts] = useState<Product[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [filters, setFilters] = useState<Filters>(emptyFilters);
+  const [filters, setFilters] = useState<Filters>({ ...emptyFilters, surface: "floor" });
   const [showAll, setShowAll] = useState(false);
   const [swatchUrls, setSwatchUrls] = useState<Record<string, string>>({});
   const [productId, setProductId] = useState<string | null>(null);
@@ -27,6 +36,8 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
   const [over, setOver] = useState(false);
   const [direction, setDirection] = useState("auto");
   const [pattern, setPattern] = useState("");
+  const [surface, setSurface] = useState("floor");
+  const [area, setArea] = useState("");
   const [lead, setLead] = useState({ name: "", phone: "" });
   const [nOpts, setNOpts] = useState(1);
   const [busy, setBusy] = useState<string | null>(null);
@@ -92,7 +103,7 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
       if (up.error) throw new Error("Upload failed: " + up.error.message);
       setBusy(`Rendering ${nOpts} option${nOpts === 1 ? "" : "s"} (15–40 s)…`);
       const { data, error } = await supabase.functions.invoke("generate", {
-        body: { store_id: store, product_id: product.id, room_path: roomPath, options: { direction, pattern }, lead_name: lead.name || null, lead_phone: lead.phone || null, num_images: nOpts },
+        body: { store_id: store, product_id: product.id, room_path: roomPath, options: { direction, pattern, surface, area: surface === "wall" ? area : "" }, lead_name: lead.name || null, lead_phone: lead.phone || null, num_images: nOpts },
       });
       if (error) {
         let msg = error.message;
@@ -155,6 +166,13 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
     <div className="two">
       <div className="card">
         <h2>New mockup</h2>
+        <div>
+          <div className="row" style={{ justifyContent: "space-between" }}><span className="small muted">Put it on</span><span className="small muted">{SURFACE_OPTS.find((o) => o[0] === surface)?.[2]}</span></div>
+          <div className="seg" style={{ flexWrap: "wrap" }}>
+            {SURFACE_OPTS.map(([v, l]) => <button key={v} type="button" className={surface === v ? "on" : ""} onClick={() => { setSurface(v); setFilters((f) => ({ ...f, surface: v === "floor" ? "floor" : v === "backsplash" ? "backsplash" : v === "shower" ? "shower" : "wall" })); setShowAll(false); }}>{l}</button>)}
+          </div>
+          {surface === "wall" && <input type="text" value={area} onChange={(e) => setArea(e.target.value)} placeholder="Which wall? e.g. behind the sofa, left, accent wall behind the bed" style={{ marginTop: 6 }} />}
+        </div>
         <div
           className={"drop" + (over ? " over" : "") + (preview ? " has" : "")}
           onDragOver={(e) => { e.preventDefault(); setOver(true); }}
@@ -192,7 +210,7 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
         {product && product.type !== "carpet" && (
           <div className="grid2">
             <label className="f">Direction
-              <select value={direction} onChange={(e) => setDirection(e.target.value)}>{DIRECTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+              <select value={direction} onChange={(e) => setDirection(e.target.value)}>{(surface === "floor" ? FLOOR_DIRECTIONS : WALL_DIRECTIONS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
             </label>
             {(PATTERNS[product.type] ?? []).length > 0 && (
               <label className="f">Layout
@@ -213,7 +231,7 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
           <span className="small muted">1 is usually enough; more options cost the same credit but take longer.</span>
         </div>
         <button className="primary big" disabled={!file || !product || !!busy || noCredits} onClick={generate}>
-          {busy ? <><span className="spinner" /> {busy}</> : noCredits ? "No credits left" : `Generate ${nOpts} option${nOpts === 1 ? "" : "s"} · 1 credit`}
+          {busy ? <><span className="spinner" /> {busy}</> : noCredits ? "No credits left" : `Generate ${nOpts} option${nOpts === 1 ? "" : "s"} on the ${SURFACE_OPTS.find((o) => o[0] === surface)?.[1].toLowerCase()} · 1 credit`}
         </button>
         {err && <p className="warn small">{err}</p>}
         {noCredits && <p className="small muted">Top up under Credits.</p>}

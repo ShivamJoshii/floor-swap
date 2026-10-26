@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase, shrinkImage, signedUrl, type Product, type Render } from "../lib/supabase";
 import type { Ctx } from "../App";
 import type { ProposalItem } from "../lib/pdf";
+import ProductFilter, { applyFilters, emptyFilters, type Filters } from "../components/ProductFilter";
+import type { Supplier } from "../lib/supabase";
 
 type Output = { path: string; url: string | null };
 
@@ -15,6 +17,9 @@ const PATTERNS: Record<string, [string, string][]> = {
 export default function Generate({ ctx }: { ctx: Ctx }) {
   const store = ctx.membership.store_id;
   const [products, setProducts] = useState<Product[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [filters, setFilters] = useState<Filters>(emptyFilters);
+  const [showAll, setShowAll] = useState(false);
   const [swatchUrls, setSwatchUrls] = useState<Record<string, string>>({});
   const [productId, setProductId] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -34,17 +39,26 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
   const product = products.find((p) => p.id === productId) ?? null;
 
   const loadProducts = useCallback(async () => {
-    const { data } = await supabase.from("products").select("*").eq("store_id", store).eq("active", true).order("name");
+    const [{ data }, { data: sup }] = await Promise.all([
+      supabase.from("products").select("*").eq("store_id", store).eq("active", true).order("name").limit(2000),
+      supabase.from("suppliers").select("*").order("name"),
+    ]);
     const list = (data ?? []) as Product[];
-    setProducts(list);
+    setProducts(list); setSuppliers((sup ?? []) as Supplier[]);
     setProductId((cur) => cur && list.some((p) => p.id === cur) ? cur : (list[0]?.id ?? null));
-    if (list.length) {
-      const { data: urls } = await supabase.storage.from("swatches").createSignedUrls(list.map((p) => p.swatch_path), 3600);
-      const map: Record<string, string> = {};
-      (urls ?? []).forEach((u, i) => { if (u.signedUrl) map[list[i].id] = u.signedUrl; });
-      setSwatchUrls(map);
-    }
   }, [store]);
+  const visible = applyFilters(products, filters);
+  const shown = showAll ? visible : visible.slice(0, 60);
+  useEffect(() => {
+    const need = shown.filter((p) => !swatchUrls[p.id]); if (!need.length) return;
+    let cancelled = false;
+    supabase.storage.from("swatches").createSignedUrls(need.map((p) => p.swatch_path), 3600).then(({ data: urls }) => {
+      if (cancelled) return;
+      setSwatchUrls((cur) => { const m = { ...cur }; (urls ?? []).forEach((u, i) => { if (u.signedUrl && need[i]) m[need[i].id] = u.signedUrl; }); return m; });
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shown.map((p) => p.id).join(",")]);
 
   const loadHistory = useCallback(async () => {
     const { data } = await supabase.from("renders").select("*, product:products(name)").eq("store_id", store).order("created_at", { ascending: false }).limit(12);
@@ -157,11 +171,12 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
 
         <div>
           <div className="row" style={{ justifyContent: "space-between" }}>
-            <span className="small muted">Product</span>
+            <span className="small muted">Product · {visible.length}{visible.length !== products.length ? ` of ${products.length}` : ""}{product ? ` · ${product.name}` : ""}</span>
             {!products.length && <span className="small warn">Add products first (Products tab).</span>}
           </div>
+          <ProductFilter list={products} suppliers={suppliers} value={filters} onChange={(f) => { setFilters(f); setShowAll(false); }} />
           <div className="catalog">
-            {products.map((p) => (
+            {shown.map((p) => (
               <div key={p.id} className={"sku" + (p.id === productId ? " on" : "")} role="button" tabIndex={0}
                 onClick={() => setProductId(p.id)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setProductId(p.id); }}>
                 <img src={swatchUrls[p.id]} alt="" />
@@ -170,6 +185,8 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
               </div>
             ))}
           </div>
+          {visible.length > shown.length && <button type="button" className="sm ghost" onClick={() => setShowAll(true)}>Show all {visible.length}</button>}
+          {!visible.length && products.length > 0 && <p className="small muted">Nothing matches. Clear a filter.</p>}
         </div>
 
         {product && product.type !== "carpet" && (

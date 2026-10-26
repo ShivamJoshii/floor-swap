@@ -2,9 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { useRef } from "react";
 import { supabase, signedUrl, type Product, type Supplier, type SupplierProduct } from "../lib/supabase";
 import { loadBitmap, analyze, rectify, whiteBalance, canvasToJpeg, type Quad, type Quality } from "../lib/image";
+import { classify, suggestTags, HUES, TONES, SURFACES, ROOMS } from "../lib/colour";
+import ProductFilter, { applyFilters, emptyFilters, type Filters } from "../components/ProductFilter";
 import type { Ctx } from "../App";
 
-const empty = { name: "", sku: "", type: "plank", length: "48", width: "7", unit: "in", price: "", notes: "", supplier_id: "", finish: "", colour_family: "", collection: "", share: true, supplier_product_id: "" };
+const empty = { name: "", sku: "", type: "plank", length: "48", width: "7", unit: "in", price: "", notes: "", supplier_id: "", finish: "", colour_family: "", collection: "", share: true, supplier_product_id: "", tone: "", hue: "", surfaces: ["floor"] as string[], rooms: [] as string[], tags: "" };
 const TYPES: Product["type"][] = ["plank", "tile", "carpet", "other"];
 
 export default function Products({ ctx }: { ctx: Ctx }) {
@@ -29,18 +31,17 @@ export default function Products({ ctx }: { ctx: Ctx }) {
   const [editing, setEditing] = useState<Product | null>(null);
   const [editForm, setEditForm] = useState({ name: "", sku: "", type: "plank", length: "", width: "", finish: "", price: "", notes: "", supplier_id: "" });
   const [editMsg, setEditMsg] = useState<string | null>(null);
+  const [filters, setFilters] = useState<Filters>(emptyFilters);
+  const [tagMsg, setTagMsg] = useState<string | null>(null);
+  const [editTags, setEditTags] = useState({ tone: "", hue: "", surfaces: [] as string[], rooms: [] as string[], tags: "" });
 
   const load = useCallback(async () => {
     const [{ data }, { data: sup }] = await Promise.all([
-      supabase.from("products").select("*").eq("store_id", store).order("created_at", { ascending: false }),
+      supabase.from("products").select("*").eq("store_id", store).order("created_at", { ascending: false }).limit(2000),
       supabase.from("suppliers").select("*").order("name"),
     ]);
     const rows = (data ?? []) as Product[];
     setList(rows); setSuppliers((sup ?? []) as Supplier[]);
-    if (rows.length) {
-      const { data: u } = await supabase.storage.from("swatches").createSignedUrls(rows.map((p) => p.swatch_path), 3600);
-      const map: Record<string, string> = {}; (u ?? []).forEach((x, i) => { if (x.signedUrl) map[rows[i].id] = x.signedUrl; }); setUrls(map);
-    }
   }, [store]);
   useEffect(() => { load(); }, [load]);
 
@@ -53,7 +54,12 @@ export default function Products({ ctx }: { ctx: Ctx }) {
       const ix = Math.round(b.width * 0.03), iy = Math.round(b.height * 0.03);
       const q: Quad = [[ix, iy], [b.width - ix, iy], [b.width - ix, b.height - iy], [ix, b.height - iy]];
       setBmp(b); setQuad(q); setQuality(analyze(b, q)); setWb(false);
-      if (!form.name) setForm((cur) => ({ ...cur, name: f.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").slice(0, 40) }));
+      const col = classify(b, 0.05);
+      setForm((cur) => {
+        const name = cur.name || f.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").slice(0, 40);
+        const sug = suggestTags({ name, type: cur.type, collection: cur.collection, length_in: parseFloat(cur.length) || null, width_in: parseFloat(cur.width) || null });
+        return { ...cur, name, tone: col.tone, hue: col.hue, colour_family: cur.colour_family || `${col.tone} ${col.hue}`, surfaces: sug.surfaces, rooms: sug.rooms, tags: cur.tags || sug.tags.join(", ") };
+      });
     } catch { setErr("Could not read that image. Use a JPG or PNG (iPhone HEIC needs converting)."); }
   }
   const swapLongEdge = () => { if (quad) { const q = [...quad]; q.push(q.shift()!); setQuad(q as Quad); } };
@@ -112,6 +118,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
   function startEdit(p: Product) {
     setEditing(p); setEditMsg(null);
     setEditForm({ name: p.name, sku: p.sku ?? "", type: p.type, length: p.length_in ? String(p.length_in) : "", width: p.width_in ? String(p.width_in) : "", finish: p.finish ?? "", price: p.price_per_sqft ? String(p.price_per_sqft) : "", notes: p.notes ?? "", supplier_id: p.supplier_id ?? "" });
+    setEditTags({ tone: p.tone ?? "", hue: p.hue ?? "", surfaces: p.surfaces ?? ["floor"], rooms: p.rooms ?? [], tags: (p.tags ?? []).join(", ") });
   }
   async function saveEdit(e: React.FormEvent) {
     e.preventDefault(); if (!editing) return;
@@ -119,6 +126,8 @@ export default function Products({ ctx }: { ctx: Ctx }) {
     const { error } = await supabase.from("products").update({
       name: editForm.name.trim(), sku: editForm.sku.trim() || null, type: editForm.type, length_in: len, width_in: wid, finish: editForm.finish.trim() || null,
       price_per_sqft: editForm.price ? parseFloat(editForm.price) : null, notes: editForm.notes.trim() || null, supplier_id: editForm.supplier_id || null,
+      tone: editTags.tone || null, hue: editTags.hue || null, colour_family: editTags.tone && editTags.hue ? `${editTags.tone} ${editTags.hue}` : editing.colour_family ?? null,
+      surfaces: editTags.surfaces.length ? editTags.surfaces : ["floor"], rooms: editTags.rooms, tags: editTags.tags.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
     }).eq("id", editing.id);
     if (error) { setEditMsg(error.message); return; }
     ctx.toast("Saved."); setEditing(null); load();
@@ -160,6 +169,8 @@ export default function Products({ ctx }: { ctx: Ctx }) {
         price_per_sqft: form.price ? parseFloat(form.price) : null, notes, swatch_path: path, created_by: ctx.session.user.id,
         supplier_id: form.supplier_id || null, supplier_product_id: form.supplier_product_id || null, finish: form.finish.trim() || null,
         colour_family: form.colour_family.trim() || null, collection: form.collection.trim() || null,
+        tone: form.tone || null, hue: form.hue || null, surfaces: form.surfaces.length ? form.surfaces : ["floor"], rooms: form.rooms,
+        tags: form.tags.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
       };
       const { error } = await supabase.from("products").insert(row);
       if (error) throw new Error(error.message);
@@ -176,7 +187,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
     if (!f) return;
     setImportMsg("Reading file…");
     try {
-      type Item = { name: string; type?: string; sku?: string | null; notes?: string | null; length_in?: number | null; width_in?: number | null; finish?: string | null; collection?: string | null; colour_family?: string | null; supplier?: string | null; jpg_b64: string };
+      type Item = { name: string; type?: string; sku?: string | null; notes?: string | null; length_in?: number | null; width_in?: number | null; finish?: string | null; collection?: string | null; colour_family?: string | null; supplier?: string | null; jpg_b64: string; tone?: string | null; hue?: string | null; surfaces?: string[]; rooms?: string[]; tags?: string[] };
       const items = JSON.parse(await f.text()) as Item[];
       if (!Array.isArray(items)) throw new Error("Not a catalog file.");
       // Resolve / create suppliers named in the file (shared by default).
@@ -203,7 +214,8 @@ export default function Products({ ctx }: { ctx: Ctx }) {
         if (up.error) { errors.push(`${it.name}: ${up.error.message}`); continue; }
         const type = (["plank", "tile", "carpet", "other"].includes(it.type ?? "") ? it.type : "tile") as Product["type"];
         const row = { id, store_id: store, name: it.name, type, sku: it.sku ?? null, notes: it.notes ?? null, length_in: it.length_in ?? null, width_in: it.width_in ?? null,
-          finish: it.finish ?? null, collection: it.collection ?? null, colour_family: it.colour_family ?? null, supplier_id: supplierId, swatch_path: path, created_by: ctx.session.user.id };
+          finish: it.finish ?? null, collection: it.collection ?? null, colour_family: it.colour_family ?? null, supplier_id: supplierId, swatch_path: path, created_by: ctx.session.user.id,
+          tone: it.tone ?? null, hue: it.hue ?? null, surfaces: it.surfaces?.length ? it.surfaces : ["floor"], rooms: it.rooms ?? [], tags: it.tags ?? [] };
         const { error } = await supabase.from("products").insert(row);
         if (error) { errors.push(`${it.name}: ${error.message}`); continue; }
         done++; if (dupKey) existingSkus.add(dupKey); existingNames.add(it.name.toLowerCase());
@@ -224,6 +236,28 @@ export default function Products({ ctx }: { ctx: Ctx }) {
     } catch (e) { setImportMsg(e instanceof Error ? e.message : String(e)); }
   }
 
+  async function autoTag() {
+    const todo = list.filter((p) => !p.hue);
+    if (!todo.length) { setTagMsg("Everything is tagged."); return; }
+    let done = 0, failed = 0;
+    for (const p of todo) {
+      setTagMsg(`Tagging ${done + failed + 1} of ${todo.length}: ${p.name}`);
+      try {
+        const u = urls[p.id] ?? (await supabase.storage.from("swatches").createSignedUrl(p.swatch_path, 600)).data?.signedUrl;
+        if (!u) throw new Error("no url");
+        const b = await loadBitmap(await (await fetch(u)).blob(), 256);
+        const col = classify(b, 0.05);
+        const sug = suggestTags({ name: p.name, type: p.type, collection: p.collection, length_in: p.length_in, width_in: p.width_in });
+        const { error } = await supabase.from("products").update({ tone: col.tone, hue: col.hue, colour_family: p.colour_family ?? `${col.tone} ${col.hue}`,
+          surfaces: p.surfaces && p.surfaces.length && !(p.surfaces.length === 1 && p.surfaces[0] === "floor") ? p.surfaces : sug.surfaces,
+          rooms: p.rooms && p.rooms.length ? p.rooms : sug.rooms, tags: p.tags && p.tags.length ? p.tags : sug.tags }).eq("id", p.id);
+        if (error) throw error; done++;
+      } catch { failed++; }
+    }
+    setTagMsg(`Tagged ${done}${failed ? `, ${failed} failed` : ""}.`); load();
+  }
+  const toggleIn = (arr: string[], v: string) => arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v];
+
   async function toggle(p: Product) {
     await supabase.from("products").update({ active: !p.active }).eq("id", p.id); load();
   }
@@ -235,7 +269,18 @@ export default function Products({ ctx }: { ctx: Ctx }) {
   }
 
   const needDims = form.type === "plank" || form.type === "tile";
-  const shown = list.filter((p) => showInactive || p.active);
+  const shown = applyFilters(list.filter((p) => showInactive || p.active), filters).slice(0, 200);
+  useEffect(() => {
+    const need = shown.filter((p) => !urls[p.id]); if (!need.length) return;
+    let cancelled = false;
+    supabase.storage.from("swatches").createSignedUrls(need.map((p) => p.swatch_path), 3600).then(({ data: u }) => {
+      if (cancelled) return;
+      setUrls((cur) => { const m = { ...cur }; (u ?? []).forEach((x, i) => { if (x.signedUrl && need[i]) m[need[i].id] = x.signedUrl; }); return m; });
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shown.map((p) => p.id).join(",")]);
+  const untagged = list.filter((p) => !p.hue).length;
 
   return (
     <div className="two">
@@ -312,7 +357,21 @@ export default function Products({ ctx }: { ctx: Ctx }) {
           </div>
         )}
         <p className="small muted">Best input: a flatbed scan at 600 dpi, or a straight-down daylight photo with the sample filling the frame. The capture score tells staff if it's good enough.</p>
-        <label className="f">Notes (optional)<textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Colour family, finish, where it's stocked…" /></label>
+        <div className="card" style={{ background: "var(--bg)", gap: 8 }}>
+          <span className="small muted">Tags (auto-filled from the swatch and name; adjust if wrong)</span>
+          <div className="row" style={{ gap: 4 }}><span className="small muted" style={{ width: 54 }}>Colour</span>
+            {HUES.map((h) => <button type="button" key={h} className={"sm" + (form.hue === h ? " on" : "")} style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => setForm({ ...form, hue: h })}>{h}</button>)}
+            <span style={{ width: 6 }} />{TONES.map((t) => <button type="button" key={t} className={"sm" + (form.tone === t ? " on" : "")} style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => setForm({ ...form, tone: t })}>{t}</button>)}
+          </div>
+          <div className="row" style={{ gap: 4 }}><span className="small muted" style={{ width: 54 }}>Where</span>
+            {SURFACES.map((x) => <button type="button" key={x} className={"sm" + (form.surfaces.includes(x) ? " on" : "")} style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => setForm({ ...form, surfaces: toggleIn(form.surfaces, x) })}>{x}</button>)}
+          </div>
+          <div className="row" style={{ gap: 4 }}><span className="small muted" style={{ width: 54 }}>Rooms</span>
+            {ROOMS.map((x) => <button type="button" key={x} className={"sm" + (form.rooms.includes(x) ? " on" : "")} style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => setForm({ ...form, rooms: toggleIn(form.rooms, x) })}>{x}</button>)}
+          </div>
+          <label className="f">Other tags (comma-separated)<input type="text" value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} placeholder="oak, herringbone, wood look" /></label>
+        </div>
+        <label className="f">Notes (optional)<textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Where it's stocked, lead time…" /></label>
         {form.supplier_id && form.sku && <label className="row small"><input type="checkbox" checked={form.share} onChange={(e) => setForm({ ...form, share: e.target.checked })} /> Add this SKU to the shared supplier catalog (no prices are shared)</label>}
         <button className="primary" disabled={busy}>{busy ? <span className="spinner" /> : "Save product"}</button>
         {err && <p className="warn small">{err}</p>}
@@ -329,6 +388,12 @@ export default function Products({ ctx }: { ctx: Ctx }) {
             <input type="file" accept="application/json,.json" style={{ width: "auto" }} onChange={(e) => { importCatalog(e.target.files?.[0]); e.target.value = ""; }} />
           </label>
           {importMsg && <span className="small">{importMsg}</span>}
+        </div>
+        <ProductFilter list={list} suppliers={suppliers} value={filters} onChange={setFilters} />
+        <div className="row">
+          <span className="small muted">{shown.length} shown{untagged ? ` · ${untagged} untagged` : ""}</span>
+          {untagged > 0 && <button type="button" className="sm" onClick={autoTag}>Auto-tag {untagged} untagged</button>}
+          {tagMsg && <span className="small">{tagMsg}</span>}
         </div>
         {editing && (
           <form className="card" style={{ background: "var(--bg)" }} onSubmit={saveEdit}>
@@ -350,6 +415,17 @@ export default function Products({ ctx }: { ctx: Ctx }) {
               <label className="f">Finish<input type="text" value={editForm.finish} onChange={(e) => setEditForm({ ...editForm, finish: e.target.value })} /></label>
               <label className="f">Notes<input type="text" value={editForm.notes} onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })} /></label>
             </div>
+            <div className="row" style={{ gap: 4 }}><span className="small muted" style={{ width: 54 }}>Colour</span>
+              {HUES.map((h) => <button type="button" key={h} className={"sm" + (editTags.hue === h ? " on" : "")} style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => setEditTags({ ...editTags, hue: h })}>{h}</button>)}
+              <span style={{ width: 6 }} />{TONES.map((t) => <button type="button" key={t} className={"sm" + (editTags.tone === t ? " on" : "")} style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => setEditTags({ ...editTags, tone: t })}>{t}</button>)}
+            </div>
+            <div className="row" style={{ gap: 4 }}><span className="small muted" style={{ width: 54 }}>Where</span>
+              {SURFACES.map((x) => <button type="button" key={x} className={"sm" + (editTags.surfaces.includes(x) ? " on" : "")} style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => setEditTags({ ...editTags, surfaces: toggleIn(editTags.surfaces, x) })}>{x}</button>)}
+            </div>
+            <div className="row" style={{ gap: 4 }}><span className="small muted" style={{ width: 54 }}>Rooms</span>
+              {ROOMS.map((x) => <button type="button" key={x} className={"sm" + (editTags.rooms.includes(x) ? " on" : "")} style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => setEditTags({ ...editTags, rooms: toggleIn(editTags.rooms, x) })}>{x}</button>)}
+            </div>
+            <label className="f">Other tags<input type="text" value={editTags.tags} onChange={(e) => setEditTags({ ...editTags, tags: e.target.value })} /></label>
             <div className="row">
               <button className="primary sm">Save changes</button>
               {editForm.supplier_id && editForm.sku && <button type="button" className="sm" onClick={async () => { await shareToCatalog({ ...editing, supplier_id: editForm.supplier_id, sku: editForm.sku, name: editForm.name, finish: editForm.finish } as Product); ctx.toast("Added to the supplier catalog."); }}>Share to supplier catalog</button>}
@@ -361,15 +437,15 @@ export default function Products({ ctx }: { ctx: Ctx }) {
         {!shown.length && <p className="muted">No products yet. Add the 5–10 you sell most.</p>}
         {shown.length > 0 && (
           <div className="table-wrap"><table>
-            <thead><tr><th></th><th>Name</th><th>Supplier</th><th className="num">Size (in)</th><th className="num">$/sq ft</th><th></th></tr></thead>
+            <thead><tr><th></th><th>Name</th><th>Supplier</th><th>Colour · where</th><th className="num">Size (in)</th><th></th></tr></thead>
             <tbody>
               {shown.map((p) => (
                 <tr key={p.id} style={{ opacity: p.active ? 1 : 0.55 }}>
                   <td><img className="thumb" src={urls[p.id]} alt="" /></td>
                   <td><strong>{p.name}</strong><div className="small muted">{p.type}{p.sku ? <span className="mono"> · {p.sku}</span> : null}{p.finish ? ` · ${p.finish}` : ""}</div></td>
                   <td className="small">{suppliers.find((su) => su.id === p.supplier_id)?.name ?? "—"}</td>
+                  <td className="small">{p.hue ? `${p.tone} ${p.hue}` : <span className="warn">untagged</span>}<div className="muted">{(p.surfaces ?? []).join(", ")}</div></td>
                   <td className="num">{p.length_in && p.width_in ? `${p.length_in} × ${p.width_in}` : "—"}</td>
-                  <td className="num">{p.price_per_sqft ?? "—"}</td>
                   <td className="row" style={{ justifyContent: "flex-end" }}>
                     <button className="sm" onClick={() => startEdit(p)}>Edit</button>
                     <button className="sm" onClick={() => toggle(p)}>{p.active ? "Hide" : "Show"}</button>

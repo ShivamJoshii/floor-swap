@@ -18,6 +18,7 @@ export type Product = {
   id: string; store_id: string; name: string; sku: string | null; type: "plank" | "tile" | "carpet" | "other";
   length_in: number | null; width_in: number | null; price_per_sqft: number | null; swatch_path: string; notes: string | null; active: boolean; created_at: string;
   supplier_id?: string | null; supplier_product_id?: string | null; finish?: string | null; colour_family?: string | null; collection?: string | null;
+  surfaces?: string[]; rooms?: string[]; tone?: string | null; hue?: string | null; tags?: string[];
 };
 export type Supplier = { id: string; name: string; website: string | null; region: string | null; store_id: string | null; created_by: string | null };
 export type SupplierProduct = {

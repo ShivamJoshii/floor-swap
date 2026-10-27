@@ -10,8 +10,10 @@ import Proposal from "./pages/Proposal";
 import Credits from "./pages/Credits";
 import Team from "./pages/Team";
 import Admin from "./pages/Admin";
+import Marketplace from "./pages/Marketplace";
+import SupplierPage from "./pages/SupplierPage";
 
-type Tab = "generate" | "proposal" | "products" | "credits" | "team" | "admin";
+type Tab = "generate" | "proposal" | "products" | "marketplace" | "supplier" | "credits" | "team" | "admin";
 
 export type Ctx = {
   session: Session;
@@ -31,6 +33,8 @@ export type Ctx = {
 export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [memberships, setMemberships] = useState<Membership[] | null>(null);
+  const [supplierIds, setSupplierIds] = useState<string[]>([]);
+  const [mode, setMode] = useState<"store" | "supplier">("store");
   const [storeId, setStoreId] = useState<string | null>(null);
   const [balance, setBalance] = useState<number | null>(null);
   const [usage, setUsage] = useState<{ plan_status: string; renders_per_month: number; used_this_period: number; credits: number | null; watermark?: boolean } | null>(null);
@@ -50,10 +54,15 @@ export default function App() {
 
   const loadMemberships = useCallback(async () => {
     if (!session) return;
-    await supabase.rpc("accept_invites").then(() => undefined, () => undefined);
-    const { data } = await supabase.from("store_members").select("store_id, role, stores(*)").order("created_at");
+    await Promise.all([supabase.rpc("accept_invites").then(() => undefined, () => undefined), supabase.rpc("accept_supplier_invites").then(() => undefined, () => undefined)]);
+    const [{ data }, { data: sm }] = await Promise.all([
+      supabase.from("store_members").select("store_id, role, stores(*)").order("created_at"),
+      supabase.from("supplier_members").select("supplier_id").eq("user_id", session.user.id),
+    ]);
     const list = (data ?? []) as unknown as Membership[];
     setMemberships(list);
+    const sids = ((sm ?? []) as { supplier_id: string }[]).map((x) => x.supplier_id); setSupplierIds(sids);
+    if (!list.length && sids.length) setMode("supplier");
     setStoreId((cur) => cur && list.some((m) => m.store_id === cur) ? cur : (list[0]?.store_id ?? null));
     const { data: adm } = await supabase.from("platform_admins").select("user_id").eq("user_id", session.user.id).maybeSingle();
     setIsAdmin(Boolean(adm));
@@ -75,10 +84,25 @@ export default function App() {
   if (memberships === null) return <div className="page"><p className="muted">Loading your store…</p></div>;
 
   const membership = memberships.find((m) => m.store_id === storeId) ?? null;
-  if (!membership) return <Onboard onDone={loadMemberships} toast={toast} email={session.user.email ?? ""} />;
+  // Standalone supplier account (no store): supplier-only shell.
+  if (!membership && (supplierIds.length || mode === "supplier")) {
+    return (
+      <>
+        <header className="topbar">
+          <span className="brand">Floor Swap</span><span className="muted">Supplier</span>
+          <div className="right"><span className="muted small">{session.user.email}</span><button className="sm ghost" onClick={() => supabase.auth.signOut()}>Sign out</button></div>
+        </header>
+        <main className="page">
+          <SupplierPage ctx={null} supplierId={supplierIds[0]} />
+          {!supplierIds.length && <p className="small muted">Run a store instead? <button className="sm ghost" onClick={() => setMode("store")}>Set up a store</button></p>}
+        </main>
+      </>
+    );
+  }
+  if (!membership) return <Onboard onDone={loadMemberships} toast={toast} email={session.user.email ?? ""} onSupplier={() => setMode("supplier")} />;
 
   const ctx: Ctx = { session, membership, balance, hasAllowance: !!(usage && usage.plan_status === "active" && usage.used_this_period < usage.renders_per_month), watermark: !!usage?.watermark, refreshBalance, reloadStore: loadMemberships, toast, isAdmin, proposal, setProposal, goTo: setTab };
-  const tabs: [Tab, string][] = [["generate", "Generate"], ["proposal", proposal.length ? `Proposal (${proposal.length})` : "Proposal"], ["products", "Products"], ["credits", "Billing"], ["team", "Store & team"]];
+  const tabs: [Tab, string][] = [["generate", "Generate"], ["proposal", proposal.length ? `Proposal (${proposal.length})` : "Proposal"], ["products", "Products"], ["marketplace", "Marketplace"], ["supplier", "Supplier"], ["credits", "Billing"], ["team", "Store & team"]];
   if (isAdmin) tabs.push(["admin", "Admin"]);
 
   return (
@@ -103,6 +127,8 @@ export default function App() {
         {tab === "generate" && <Generate ctx={ctx} />}
         {tab === "proposal" && <Proposal ctx={ctx} />}
         {tab === "products" && <Products ctx={ctx} />}
+        {tab === "marketplace" && <Marketplace ctx={ctx} />}
+        {tab === "supplier" && <SupplierPage ctx={ctx} />}
         {tab === "credits" && <Credits ctx={ctx} />}
         {tab === "team" && <Team ctx={ctx} />}
         {tab === "admin" && isAdmin && <Admin ctx={ctx} />}

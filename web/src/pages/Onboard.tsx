@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { supabase } from "../lib/supabase";
 
-export default function Onboard({ onDone, toast, email }: { onDone: () => Promise<void>; toast: (m: string) => void; email: string }) {
+export default function Onboard({ onDone, toast, email, onSupplier }: { onDone: () => Promise<void>; toast: (m: string) => void; email: string; onSupplier?: () => void }) {
   const [name, setName] = useState("");
   const [city, setCity] = useState("");
   const [busy, setBusy] = useState(false);
@@ -25,6 +25,7 @@ export default function Onboard({ onDone, toast, email }: { onDone: () => Promis
         <label className="f">City<input id="storeCity" type="text" value={city} onChange={(e) => setCity(e.target.value)} placeholder="Edmonton" /></label>
         <button className="primary" disabled={busy}>{busy ? <span className="spinner" /> : "Create store"}</button>
         {err && <p className="warn small">{err}</p>}
+        {onSupplier && <p className="small muted">Not a store? <button type="button" className="sm ghost" style={{ padding: "0 4px" }} onClick={onSupplier}>I'm a supplier or distributor</button></p>}
         <div className="row"><button type="button" className="sm ghost" onClick={() => supabase.auth.signOut()}>Sign out</button></div>
       </form>
     </div>

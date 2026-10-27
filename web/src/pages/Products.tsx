@@ -252,6 +252,8 @@ export default function Products({ ctx }: { ctx: Ctx }) {
           surfaces: p.surfaces && p.surfaces.length && !(p.surfaces.length === 1 && p.surfaces[0] === "floor") ? p.surfaces : sug.surfaces,
           rooms: p.rooms && p.rooms.length ? p.rooms : sug.rooms, tags: p.tags && p.tags.length ? p.tags : sug.tags }).eq("id", p.id);
         if (error) throw error; done++;
+        if (p.supplier_product_id) await supabase.from("supplier_products").update({ tone: col.tone, hue: col.hue, colour_family: p.colour_family ?? `${col.tone} ${col.hue}`, surfaces: sug.surfaces, rooms: sug.rooms, tags: sug.tags }).eq("id", p.supplier_product_id).is("hue", null);
+        else if (p.supplier_id && p.sku) await supabase.from("supplier_products").update({ tone: col.tone, hue: col.hue, colour_family: p.colour_family ?? `${col.tone} ${col.hue}`, surfaces: sug.surfaces, rooms: sug.rooms, tags: sug.tags }).eq("supplier_id", p.supplier_id).eq("sku", p.sku).is("hue", null);
       } catch { failed++; }
     }
     setTagMsg(`Tagged ${done}${failed ? `, ${failed} failed` : ""}.`); load();

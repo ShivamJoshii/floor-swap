@@ -163,17 +163,13 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
   }
   const noCredits = ctx.balance !== null && ctx.balance <= 0 && !ctx.hasAllowance;
 
+  const surfaceLabel = SURFACE_OPTS.find((o) => o[0] === surface)?.[1].toLowerCase() ?? "floor";
+  const ready = !!file && !!product;
+
   return (
-    <div className="two">
+    <div className="two gen">
       <div className="card">
-        <h2>New mockup</h2>
-        <div>
-          <div className="row" style={{ justifyContent: "space-between" }}><span className="small muted">Put it on</span><span className="small muted">{SURFACE_OPTS.find((o) => o[0] === surface)?.[2]}</span></div>
-          <div className="seg" style={{ flexWrap: "wrap" }}>
-            {SURFACE_OPTS.map(([v, l]) => <button key={v} type="button" className={surface === v ? "on" : ""} onClick={() => { setSurface(v); setFilters((f) => ({ ...f, surface: v === "floor" ? "floor" : v === "backsplash" ? "backsplash" : v === "shower" ? "shower" : "wall" })); setShowAll(false); }}>{l}</button>)}
-          </div>
-          {surface === "wall" && <input type="text" value={area} onChange={(e) => setArea(e.target.value)} placeholder="Which wall? e.g. behind the sofa, left, accent wall behind the bed" style={{ marginTop: 6 }} />}
-        </div>
+        <div className="step"><span className="n">1</span><strong>Customer's room</strong></div>
         <div
           className={"drop" + (over ? " over" : "") + (preview ? " has" : "")}
           onDragOver={(e) => { e.preventDefault(); setOver(true); }}
@@ -184,108 +180,119 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") fileInput.current?.click(); }}
         >
           {preview && <img src={preview} alt="Room" />}
-          <span className="hint">{preview ? "Click or drop to replace" : "Drop the lead's room photo here, or click to choose"}</span>
+          <span className="hint">{preview ? "Change photo" : <>Drop a photo<br /><span className="small">or tap to choose</span></>}</span>
           <input ref={fileInput} type="file" accept="image/*" onClick={(e) => e.stopPropagation()} onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ""; }} />
         </div>
 
-        <div>
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <span className="small muted">Product · {visible.length}{visible.length !== products.length ? ` of ${products.length}` : ""}{product ? ` · ${product.name}` : ""}</span>
-            {!products.length && <span className="small warn">Add products first (Products tab).</span>}
-          </div>
-          <ProductFilter list={products} suppliers={suppliers} value={filters} onChange={(f) => { setFilters(f); setShowAll(false); }} />
-          <div className="catalog">
-            {shown.map((p) => (
-              <div key={p.id} className={"sku" + (p.id === productId ? " on" : "")} role="button" tabIndex={0}
-                onClick={() => setProductId(p.id)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setProductId(p.id); }}>
-                <img src={swatchUrls[p.id]} alt="" />
-                <div className="nm">{p.name}</div>
-                <div className="dm">{p.length_in && p.width_in ? `${p.length_in}×${p.width_in} in` : p.type}</div>
-              </div>
-            ))}
-          </div>
-          {visible.length > shown.length && <button type="button" className="sm ghost" onClick={() => setShowAll(true)}>Show all {visible.length}</button>}
-          {!visible.length && products.length > 0 && <p className="small muted">Nothing matches. Clear a filter.</p>}
+        <div className="step"><span className="n">2</span><strong>Where</strong></div>
+        <div className="seg">
+          {SURFACE_OPTS.map(([v, l]) => <button key={v} type="button" className={surface === v ? "on" : ""} onClick={() => { setSurface(v); setFilters((f) => ({ ...f, surface: v === "floor" ? "floor" : v === "backsplash" ? "backsplash" : v === "shower" ? "shower" : "wall" })); setShowAll(false); }}>{l}</button>)}
         </div>
+        {surface === "wall" && <input type="text" value={area} onChange={(e) => setArea(e.target.value)} placeholder="Which wall? e.g. behind the sofa" />}
 
-        {product && product.type !== "carpet" && (
-          <div className="grid2">
-            <label className="f">Direction
-              <select value={direction} onChange={(e) => setDirection(e.target.value)}>{(surface === "floor" ? FLOOR_DIRECTIONS : WALL_DIRECTIONS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
-            </label>
-            {(PATTERNS[product.type] ?? []).length > 0 && (
-              <label className="f">Layout
-                <select value={pattern} onChange={(e) => setPattern(e.target.value)}>{PATTERNS[product.type].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
-              </label>
-            )}
-          </div>
+        <div className="step"><span className="n">3</span><strong>Product</strong>{product && <span className="muted small grow" style={{ textAlign: "right" }}>{product.name}</span>}</div>
+        {!products.length ? <p className="small muted">No products yet. <button className="sm ghost" style={{ padding: "0 4px" }} onClick={() => ctx.goTo("products")}>Add your first</button></p> : (
+          <>
+            <ProductFilter list={products} suppliers={suppliers} value={filters} onChange={(f) => { setFilters(f); setShowAll(false); }} hideSurface />
+            <div className="catalog">
+              {shown.map((p) => (
+                <div key={p.id} className={"sku" + (p.id === productId ? " on" : "")} role="button" tabIndex={0}
+                  onClick={() => setProductId(p.id)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setProductId(p.id); }}>
+                  <img src={swatchUrls[p.id]} alt="" />
+                  <div className="nm">{p.name}</div>
+                </div>
+              ))}
+            </div>
+            {visible.length > shown.length && <button type="button" className="sm ghost" onClick={() => setShowAll(true)}>Show all {visible.length}</button>}
+            {!visible.length && <p className="small muted">Nothing matches.</p>}
+          </>
         )}
 
-        <div className="grid2">
-          <label className="f">Lead name (optional)<input type="text" value={lead.name} onChange={(e) => setLead({ ...lead, name: e.target.value })} /></label>
-          <label className="f">Lead phone (optional)<input type="tel" value={lead.phone} onChange={(e) => setLead({ ...lead, phone: e.target.value })} /></label>
-        </div>
+        <details className="more">
+          <summary>More options</summary>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 12 }}>
+            {product && product.type !== "carpet" && (
+              <div className="grid2">
+                <label className="f">Direction
+                  <select value={direction} onChange={(e) => setDirection(e.target.value)}>{(surface === "floor" ? FLOOR_DIRECTIONS : WALL_DIRECTIONS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+                </label>
+                {(PATTERNS[product.type] ?? []).length > 0 && (
+                  <label className="f">Layout
+                    <select value={pattern} onChange={(e) => setPattern(e.target.value)}>{PATTERNS[product.type].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+                  </label>
+                )}
+              </div>
+            )}
+            <div className="row"><span className="small muted">Versions</span><div className="seg">{[1, 2, 3].map((n) => <button key={n} type="button" className={nOpts === n ? "on" : ""} onClick={() => setNOpts(n)}>{n}</button>)}</div></div>
+            <div className="grid2">
+              <label className="f">Customer name<input type="text" value={lead.name} onChange={(e) => setLead({ ...lead, name: e.target.value })} /></label>
+              <label className="f">Customer phone<input type="tel" value={lead.phone} onChange={(e) => setLead({ ...lead, phone: e.target.value })} /></label>
+            </div>
+          </div>
+        </details>
 
-        <div className="row">
-          <span className="small muted">Options</span>
-          <div className="seg">{[1, 2, 3].map((n) => <button key={n} type="button" className={nOpts === n ? "on" : ""} onClick={() => setNOpts(n)}>{n}</button>)}</div>
-          <span className="small muted">1 is usually enough; more options cost the same credit but take longer.</span>
-        </div>
-        <button className="primary big" disabled={!file || !product || !!busy || noCredits} onClick={generate}>
-          {busy ? <><span className="spinner" /> {busy}</> : noCredits ? "No renders left" : `Generate ${nOpts} option${nOpts === 1 ? "" : "s"} on the ${SURFACE_OPTS.find((o) => o[0] === surface)?.[1].toLowerCase()} · 1 credit`}
+        <button className="primary big" disabled={!ready || !!busy || noCredits} onClick={generate}>
+          {busy ? <><span className="spinner" /> {busy}</> : noCredits ? "No renders left" : !file ? "Add a room photo" : !product ? "Pick a product" : `Show it on the ${surfaceLabel}`}
         </button>
         {err && <p className="warn small">{err}</p>}
-        {noCredits && <p className="small muted">Pick a plan or add a top-up under Billing.</p>}
+        {noCredits && <p className="small muted">Out of renders. <button className="sm ghost" style={{ padding: "0 4px" }} onClick={() => ctx.goTo("credits")}>See plans</button></p>}
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>
-        <div className="card">
-          <h2>{results ? `Options · ${results.product.name}` : "Options"}</h2>
-          {!results && <p className="muted">Your options show up here. Click any to enlarge, then download, copy, or add it to a proposal.</p>}
-          {results && (
-            <div className="results">
+        {!results && !busy && (
+          <div className="card empty">
+            <div className="hero-steps">
+              <div><span className="n">1</span>Photo of their room</div>
+              <div><span className="n">2</span>Floor, wall or backsplash</div>
+              <div><span className="n">3</span>Pick your product</div>
+            </div>
+            <p className="muted">Their room, your product, in about 20 seconds.</p>
+          </div>
+        )}
+        {busy && !results && <div className="card empty"><span className="spinner" style={{ width: 28, height: 28 }} /><p className="muted">{busy}</p></div>}
+        {results && (
+          <div className="card">
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <h2 style={{ textTransform: "none", letterSpacing: 0, fontSize: "var(--ts-md)", color: "var(--color-primary)" }}>{results.product.name}</h2>
+              {ctx.proposal.length > 0 && <button className="sm primary" onClick={() => ctx.goTo("proposal")}>Send proposal ({ctx.proposal.length}) →</button>}
+            </div>
+            <div className="results big">
+              {results.outputs.map((o, i) => (
+                <div className="result" key={o.path}>
+                  {o.url ? <img src={o.url} alt={`Version ${i + 1}`} onClick={() => setZoom(o.url)} style={{ cursor: "zoom-in" }} /> : <div className="muted" style={{ padding: 20 }}>Image unavailable</div>}
+                  <div className="bar">
+                    {o.url && <button className={"sm" + (inProposal(o.path) ? " on" : " primary")} onClick={() => toggleProposal(o)}>{inProposal(o.path) ? "✓ In proposal" : "Add to proposal"}</button>}
+                    <span className="grow" />
+                    {o.url && <button className="sm ghost" onClick={() => download(o.url!, `${safe(results.product.name)}-${i + 1}.jpg`)}>Download</button>}
+                    {o.url && <button className="sm ghost" onClick={() => copy(o.url!)}>Copy</button>}
+                  </div>
+                </div>
+              ))}
               {results.before && (
-                <div className="result">
+                <div className="result before">
                   <img src={results.before} alt="Before" onClick={() => setZoom(results.before)} style={{ cursor: "zoom-in" }} />
                   <div className="bar"><span className="small muted">Before</span></div>
                 </div>
               )}
-              {results.outputs.map((o, i) => (
-                <div className="result" key={o.path}>
-                  {o.url ? <img src={o.url} alt={`Option ${i + 1}`} onClick={() => setZoom(o.url)} style={{ cursor: "zoom-in" }} /> : <div className="muted" style={{ padding: 20 }}>Image unavailable</div>}
-                  <div className="bar">
-                    <span className="small muted grow">Option {i + 1}</span>
-                    {o.url && <button className={"sm" + (inProposal(o.path) ? " on" : "")} onClick={() => toggleProposal(o)}>{inProposal(o.path) ? "In proposal ✓" : "+ Proposal"}</button>}
-                    {o.url && <button className="sm" onClick={() => download(o.url!, `${safe(results.product.name)}-option-${i + 1}.jpg`)}>Download</button>}
-                    {o.url && <button className="sm" onClick={() => copy(o.url!)}>Copy</button>}
-                  </div>
-                </div>
+            </div>
+            <p className="small muted">Try another product on the same photo: just pick it and hit the button again.</p>
+          </div>
+        )}
+
+        {history.filter((r) => r.status === "done").length > 0 && (
+          <div className="card">
+            <h2>Recent</h2>
+            <div className="recent">
+              {history.filter((r) => r.status === "done").map((r) => (
+                <button key={r.id} className="recent-item" onClick={() => openHistory(r)} title={r.product?.name ?? ""}>
+                  {r.thumb ? <img src={r.thumb} alt="" /> : <div />}
+                  <span className="small">{r.product?.name ?? "—"}</span>
+                  <span className="small muted">{r.lead_name || new Date(r.created_at).toLocaleDateString("en-CA", { month: "short", day: "numeric" })}</span>
+                </button>
               ))}
             </div>
-          )}
-        </div>
-
-        <div className="card">
-          <h2>Recent</h2>
-          {!history.length && <p className="muted">Nothing generated yet.</p>}
-          {history.length > 0 && (
-            <div className="table-wrap"><table>
-              <thead><tr><th></th><th>Product</th><th>Lead</th><th>When</th><th>Status</th><th></th></tr></thead>
-              <tbody>
-                {history.map((r) => (
-                  <tr key={r.id}>
-                    <td>{r.thumb ? <img className="thumb" src={r.thumb} alt="" /> : <div className="thumb" />}</td>
-                    <td>{r.product?.name ?? "—"}</td>
-                    <td>{r.lead_name || r.lead_phone || "—"}</td>
-                    <td className="muted">{new Date(r.created_at).toLocaleString("en-CA", { dateStyle: "short", timeStyle: "short" })}</td>
-                    <td><span className={"status " + r.status}>{r.status}</span>{r.status === "failed" && r.error && <div className="small warn">{r.error.slice(0, 80)}</div>}</td>
-                    <td>{r.status === "done" && <button className="sm" onClick={() => openHistory(r)}>Open</button>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table></div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {zoom && <div className="lightbox" onClick={() => setZoom(null)}><img src={zoom} alt="" /></div>}

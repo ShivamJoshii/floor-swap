@@ -24,33 +24,34 @@ export function applyFilters(list: Product[], f: Filters): Product[] {
   });
 }
 
-export default function ProductFilter({ list, suppliers, value, onChange, compact }: { list: Product[]; suppliers: Supplier[]; value: Filters; onChange: (f: Filters) => void; compact?: boolean }) {
+export default function ProductFilter({ list, suppliers, value, onChange, compact, hideSurface }: { list: Product[]; suppliers: Supplier[]; value: Filters; onChange: (f: Filters) => void; compact?: boolean; hideSurface?: boolean }) {
   const [more, setMore] = useState(false);
   const tags = useMemo(() => { const m = new Map<string, number>(); list.forEach((p) => (p.tags ?? []).forEach((t) => m.set(t, (m.get(t) ?? 0) + 1))); return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 14); }, [list]);
   const set = (k: keyof Filters, v: string) => onChange({ ...value, [k]: value[k] === v ? "" : v });
-  const active = Object.entries(value).filter(([k, v]) => v && k !== "q").length;
+  const active = Object.entries(value).filter(([k, v]) => v && k !== "q" && !(hideSurface && k === "surface")).length;
   const Chip = ({ k, v, label }: { k: keyof Filters; v: string; label?: string }) => (
     <button type="button" className={"sm" + (value[k] === v ? " on" : "")} onClick={() => set(k, v)} style={{ padding: "3px 8px", fontSize: 12 }}>{label ?? v}</button>
   );
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div className="row">
-        <input type="search" className="grow" placeholder="Search name, SKU, colour, tag…" value={value.q} onChange={(e) => onChange({ ...value, q: e.target.value })} style={{ minWidth: 160 }} />
-        {!compact && <button type="button" className="sm ghost" onClick={() => setMore(!more)}>{more ? "Fewer filters" : `Filters${active ? ` (${active})` : ""}`}</button>}
-        {active > 0 && <button type="button" className="sm ghost" onClick={() => onChange({ ...emptyFilters, q: value.q })}>Clear</button>}
+        <input type="search" className="grow" placeholder="Search products" value={value.q} onChange={(e) => onChange({ ...value, q: e.target.value })} style={{ minWidth: 160 }} />
+        {!compact && <button type="button" className="sm ghost" onClick={() => setMore(!more)}>{more ? "Less" : `Filters${active ? ` · ${active}` : ""}`}</button>}
+        {active > 0 && <button type="button" className="sm ghost" onClick={() => onChange({ ...emptyFilters, q: value.q, surface: hideSurface ? value.surface : "" })}>Clear</button>}
       </div>
-      <div className="row" style={{ gap: 4 }}>
-        <span className="small muted" style={{ width: 54 }}>Where</span>
-        {SURFACES.map((s) => <Chip key={s} k="surface" v={s} />)}
-      </div>
-      <div className="row" style={{ gap: 4 }}>
-        <span className="small muted" style={{ width: 54 }}>Colour</span>
-        {HUES.filter((h) => h !== "multi").map((h) => <Chip key={h} k="hue" v={h} />)}
-        <span style={{ width: 6 }} />
-        {TONES.map((t) => <Chip key={t} k="tone" v={t} />)}
+      <div className="row swatches" style={{ gap: 6 }}>
+        {HUES.filter((h) => h !== "multi").map((h) => <button key={h} type="button" title={h} aria-label={h} className={"dot" + (value.hue === h ? " on" : "")} data-hue={h} onClick={() => set("hue", h)} />)}
       </div>
       {(more || compact) && (
         <>
+          {!hideSurface && <div className="row" style={{ gap: 4 }}>
+            <span className="small muted" style={{ width: 54 }}>Where</span>
+            {SURFACES.map((s) => <Chip key={s} k="surface" v={s} />)}
+          </div>}
+          <div className="row" style={{ gap: 4 }}>
+            <span className="small muted" style={{ width: 54 }}>Shade</span>
+            {TONES.map((t) => <Chip key={t} k="tone" v={t} />)}
+          </div>
           <div className="row" style={{ gap: 4 }}>
             <span className="small muted" style={{ width: 54 }}>Type</span>
             {["plank", "tile", "carpet", "other"].map((t) => <Chip key={t} k="type" v={t} label={t === "other" ? "mosaic/other" : t} />)}

@@ -102,25 +102,34 @@ export default function App() {
   if (!membership) return <Onboard onDone={loadMemberships} toast={toast} email={session.user.email ?? ""} onSupplier={() => setMode("supplier")} />;
 
   const ctx: Ctx = { session, membership, balance, hasAllowance: !!(usage && usage.plan_status === "active" && usage.used_this_period < usage.renders_per_month), watermark: !!usage?.watermark, refreshBalance, reloadStore: loadMemberships, toast, isAdmin, proposal, setProposal, goTo: setTab };
-  const tabs: [Tab, string][] = [["generate", "Generate"], ["proposal", proposal.length ? `Proposal (${proposal.length})` : "Proposal"], ["products", "Products"], ["marketplace", "Marketplace"], ["supplier", "Supplier"], ["credits", "Billing"], ["team", "Store & team"]];
-  if (isAdmin) tabs.push(["admin", "Admin"]);
+  const tabs: [Tab, string][] = [["generate", "Create"], ["proposal", proposal.length ? `Proposal · ${proposal.length}` : "Proposal"], ["products", "Products"], ["marketplace", "Marketplace"]];
+  const menu: [Tab, string][] = [["credits", "Plan & billing"], ["team", "Store settings"], ["supplier", "Sell wholesale"]];
+  if (isAdmin) menu.push(["admin", "Admin"]);
+  const pill = usage?.plan_status === "active" && usage.renders_per_month > 0
+    ? { text: `${Math.max(0, usage.renders_per_month - usage.used_this_period)} left`, low: usage.used_this_period >= usage.renders_per_month * 0.9 }
+    : { text: balance === null ? "…" : `${balance} left${usage?.plan_status === "trial" ? " · trial" : ""}`, low: balance !== null && balance <= 3 };
 
   return (
     <>
       <header className="topbar">
-        <span className="brand">Floor Swap</span>
-        {memberships.length > 1 ? (
-          <select value={storeId ?? ""} onChange={(e) => setStoreId(e.target.value)} style={{ width: "auto" }} aria-label="Store">
-            {memberships.map((m) => <option key={m.store_id} value={m.store_id}>{m.stores.name}</option>)}
-          </select>
-        ) : <span className="muted">{membership.stores.name}</span>}
+        <span className="brand" onClick={() => setTab("generate")} style={{ cursor: "pointer" }}>Floor Swap</span>
         <nav>{tabs.map(([t, l]) => <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>{l}</button>)}</nav>
         <div className="right">
-          {usage?.plan_status === "active" && usage.renders_per_month > 0
-            ? <span className={"credits-pill" + (usage.used_this_period >= usage.renders_per_month * 0.9 ? " low" : "")} title="Renders used this month">{usage.used_this_period}/{usage.renders_per_month} this month{balance ? ` · +${balance}` : ""}</span>
-            : <span className={"credits-pill" + (balance !== null && balance <= 3 ? " low" : "")} title="Renders left">{balance === null ? "…" : `${balance} render${balance === 1 ? "" : "s"} left${usage?.plan_status === "trial" ? " · trial" : ""}`}</span>}
-          <span className="muted small">{session.user.email}</span>
-          <button className="sm ghost" onClick={() => supabase.auth.signOut()}>Sign out</button>
+          <button className={"credits-pill" + (pill.low ? " low" : "")} title="Renders" onClick={() => setTab("credits")}>{pill.text}</button>
+          <details className="menu">
+            <summary>{membership.stores.name}</summary>
+            <div className="menu-pop" onClick={(e) => { const d = e.currentTarget.parentElement as HTMLDetailsElement; if ((e.target as HTMLElement).tagName === "BUTTON") d.open = false; }}>
+              {memberships.length > 1 && (
+                <select value={storeId ?? ""} onChange={(e) => setStoreId(e.target.value)} aria-label="Switch store">
+                  {memberships.map((m) => <option key={m.store_id} value={m.store_id}>{m.stores.name}</option>)}
+                </select>
+              )}
+              {menu.map(([t, l]) => <button key={t} className={"ghost" + (tab === t ? " on" : "")} onClick={() => setTab(t)}>{l}</button>)}
+              <hr />
+              <span className="small muted" style={{ padding: "0 12px" }}>{session.user.email}</span>
+              <button className="ghost" onClick={() => supabase.auth.signOut()}>Sign out</button>
+            </div>
+          </details>
         </div>
       </header>
       <main className="page">

@@ -24,6 +24,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [showInactive, setShowInactive] = useState(false);
+  const [adding, setAdding] = useState(false);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [newSupplier, setNewSupplier] = useState<{ open: boolean; name: string; website: string; shared: boolean }>({ open: false, name: "", website: "", shared: true });
   const [catQ, setCatQ] = useState("");
@@ -176,7 +177,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
       if (error) throw new Error(error.message);
       if (form.share && row.supplier_id && row.sku) await shareToCatalog({ ...row, active: true, created_at: "" } as Product, blob);
       ctx.toast(`${form.name} added.`);
-      setForm(empty); setBmp(null); setQuad(null); setQuality(null);
+      setForm(empty); setBmp(null); setQuad(null); setQuality(null); setAdding(false);
       load();
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
@@ -285,11 +286,28 @@ export default function Products({ ctx }: { ctx: Ctx }) {
   const untagged = list.filter((p) => !p.hue).length;
 
   return (
-    <div className="two">
-      <form className="card" onSubmit={save}>
-        <h2>Add product</h2>
-        <label className="f">Find in supplier catalog
-          <input type="text" value={catQ} onChange={(e) => setCatQ(e.target.value)} placeholder="Type a product name or SKU…" />
+    <div className="stack">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h1 style={{ margin: 0 }}>Products <span className="muted" style={{ fontWeight: 400 }}>{list.filter((p) => p.active).length}</span></h1>
+        <div className="row">
+          {untagged > 0 && <button type="button" className="sm ghost" onClick={autoTag}>Auto-tag {untagged}</button>}
+          <details className="menu">
+            <summary>More</summary>
+            <div className="menu-pop">
+              <label className="ghost" style={{ padding: "8px 12px", cursor: "pointer" }}>Import catalog file
+                <input type="file" accept="application/json,.json" style={{ display: "none" }} onChange={(e) => { importCatalog(e.target.files?.[0]); e.target.value = ""; }} />
+              </label>
+              <label className="row small" style={{ padding: "8px 12px" }}><input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} /> Show hidden</label>
+            </div>
+          </details>
+          <button type="button" className="primary" onClick={() => setAdding(!adding)}>{adding ? "Close" : "+ Add product"}</button>
+        </div>
+      </div>
+      {(importMsg || tagMsg) && <p className="small">{importMsg ?? tagMsg}</p>}
+      {adding && <form className="card" onSubmit={save} style={{ maxWidth: 640 }}>
+        <h2>New product</h2>
+        <label className="f">Search supplier catalog
+          <input type="text" value={catQ} onChange={(e) => setCatQ(e.target.value)} placeholder="Name or SKU" />
         </label>
         {catHits.length > 0 && (
           <div className="card" style={{ background: "var(--color-canvas)", padding: 8, gap: 4 }}>
@@ -322,11 +340,15 @@ export default function Products({ ctx }: { ctx: Ctx }) {
             <div className="row"><button type="button" className="sm primary" onClick={createSupplier}>Add supplier</button><button type="button" className="sm ghost" onClick={() => setNewSupplier({ ...newSupplier, open: false })}>Cancel</button></div>
           </div>
         )}
+        <details className="more"><summary>More details</summary>
         <div className="grid3">
           <label className="f">Finish<input type="text" value={form.finish} onChange={(e) => setForm({ ...form, finish: e.target.value })} placeholder="matte / polished" /></label>
           <label className="f">Colour family<input type="text" value={form.colour_family} onChange={(e) => setForm({ ...form, colour_family: e.target.value })} placeholder="grey, warm oak…" /></label>
           <label className="f">Collection<input type="text" value={form.collection} onChange={(e) => setForm({ ...form, collection: e.target.value })} /></label>
         </div>
+        <label className="f">Price per sq ft<input type="number" step="0.01" min="0" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} /></label>
+        <label className="f">Notes<textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Stock, lead time…" /></label>
+        </details>
         <div className="grid2">
           <label className="f">Type
             <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value, length: e.target.value === "tile" ? "24" : "48", width: e.target.value === "tile" ? "12" : "7" })}>
@@ -341,10 +363,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
             <label className="f">Unit<select value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })}><option value="in">in</option><option value="mm">mm</option><option value="cm">cm</option></select></label>
           </div>
         )}
-        <div className="grid2">
-          <label className="f">Price per sq ft (optional)<input type="number" step="0.01" min="0" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} /></label>
-          <label className="f">Swatch scan or photo<input type="file" accept="image/*" onChange={(e) => { pickSwatch(e.target.files?.[0]); e.target.value = ""; }} /></label>
-        </div>
+        <label className="f">Swatch photo<input type="file" accept="image/*" onChange={(e) => { pickSwatch(e.target.files?.[0]); e.target.value = ""; }} /></label>
         {bmp && quad && (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <canvas ref={cropRef} id="swatchCrop" style={{ width: "100%", maxWidth: 360, touchAction: "none", cursor: "grab", borderRadius: 4 }}
@@ -358,9 +377,8 @@ export default function Products({ ctx }: { ctx: Ctx }) {
             <p className="small muted">Drag the dots to the edges of one plank or tile. Top edge = long edge. Straighter crop, better render.</p>
           </div>
         )}
-        <p className="small muted">Best input: a flatbed scan at 600 dpi, or a straight-down daylight photo with the sample filling the frame. The capture score tells staff if it's good enough.</p>
-        <div className="card" style={{ background: "var(--color-canvas)", gap: 8 }}>
-          <span className="small muted">Tags (auto-filled from the swatch and name; adjust if wrong)</span>
+        {!bmp && <p className="small muted">Shoot straight down in daylight, sample filling the frame.</p>}
+        <details className="more"><summary>Tags (auto-filled)</summary>
           <div className="row" style={{ gap: 4 }}><span className="small muted" style={{ width: 54 }}>Colour</span>
             {HUES.map((h) => <button type="button" key={h} className={"sm" + (form.hue === h ? " on" : "")} style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => setForm({ ...form, hue: h })}>{h}</button>)}
             <span style={{ width: 6 }} />{TONES.map((t) => <button type="button" key={t} className={"sm" + (form.tone === t ? " on" : "")} style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => setForm({ ...form, tone: t })}>{t}</button>)}
@@ -371,32 +389,15 @@ export default function Products({ ctx }: { ctx: Ctx }) {
           <div className="row" style={{ gap: 4 }}><span className="small muted" style={{ width: 54 }}>Rooms</span>
             {ROOMS.map((x) => <button type="button" key={x} className={"sm" + (form.rooms.includes(x) ? " on" : "")} style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => setForm({ ...form, rooms: toggleIn(form.rooms, x) })}>{x}</button>)}
           </div>
-          <label className="f">Other tags (comma-separated)<input type="text" value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} placeholder="oak, herringbone, wood look" /></label>
-        </div>
-        <label className="f">Notes (optional)<textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Where it's stocked, lead time…" /></label>
-        {form.supplier_id && form.sku && <label className="row small"><input type="checkbox" checked={form.share} onChange={(e) => setForm({ ...form, share: e.target.checked })} /> Add this SKU to the shared supplier catalog (no prices are shared)</label>}
+          <label className="f">Other tags<input type="text" value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} placeholder="oak, herringbone" /></label>
+        </details>
+        {form.supplier_id && form.sku && <label className="row small"><input type="checkbox" checked={form.share} onChange={(e) => setForm({ ...form, share: e.target.checked })} /> Share SKU to supplier catalog (no prices)</label>}
         <button className="primary" disabled={busy}>{busy ? <span className="spinner" /> : "Save product"}</button>
         {err && <p className="warn small">{err}</p>}
-      </form>
+      </form>}
 
       <div className="card">
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <h2>Catalog · {list.filter((p) => p.active).length} active</h2>
-          <label className="row small muted"><input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} /> show hidden</label>
-        </div>
-        <div className="row">
-          <label className="sm" style={{ display: "inline-block" }}>
-            <span className="small muted">Import catalog file (.json): </span>
-            <input type="file" accept="application/json,.json" style={{ width: "auto" }} onChange={(e) => { importCatalog(e.target.files?.[0]); e.target.value = ""; }} />
-          </label>
-          {importMsg && <span className="small">{importMsg}</span>}
-        </div>
         <ProductFilter list={list} suppliers={suppliers} value={filters} onChange={setFilters} />
-        <div className="row">
-          <span className="small muted">{shown.length} shown{untagged ? ` · ${untagged} untagged` : ""}</span>
-          {untagged > 0 && <button type="button" className="sm" onClick={autoTag}>Auto-tag {untagged} untagged</button>}
-          {tagMsg && <span className="small">{tagMsg}</span>}
-        </div>
         {editing && (
           <form className="card" style={{ background: "var(--color-canvas)" }} onSubmit={saveEdit}>
             <div className="row" style={{ justifyContent: "space-between" }}><strong>Edit · {editing.name}</strong><button type="button" className="sm ghost" onClick={() => setEditing(null)}>Close</button></div>
@@ -431,12 +432,13 @@ export default function Products({ ctx }: { ctx: Ctx }) {
             <div className="row">
               <button className="primary sm">Save changes</button>
               {editForm.supplier_id && editForm.sku && <button type="button" className="sm" onClick={async () => { await shareToCatalog({ ...editing, supplier_id: editForm.supplier_id, sku: editForm.sku, name: editForm.name, finish: editForm.finish } as Product); ctx.toast("Added to the supplier catalog."); }}>Share to supplier catalog</button>}
+              {isOwner && <button type="button" className="sm ghost" onClick={() => { if (confirm(`Delete ${editing.name}?`)) { remove(editing); setEditing(null); } }}>Delete</button>}
               {editMsg && <span className="warn small">{editMsg}</span>}
             </div>
-            <p className="small muted">To replace the swatch image, add the product again with the new scan and hide this one.</p>
+            
           </form>
         )}
-        {!shown.length && <p className="muted">No products yet. Add the 5–10 you sell most.</p>}
+        {!shown.length && <p className="muted">{list.length ? "Nothing matches." : "No products yet. Add the 5–10 you sell most."}</p>}
         {shown.length > 0 && (
           <div className="table-wrap"><table>
             <thead><tr><th></th><th>Name</th><th>Supplier</th><th>Colour · where</th><th className="num">Size (in)</th><th></th></tr></thead>
@@ -448,11 +450,10 @@ export default function Products({ ctx }: { ctx: Ctx }) {
                   <td className="small">{suppliers.find((su) => su.id === p.supplier_id)?.name ?? "—"}</td>
                   <td className="small">{p.hue ? `${p.tone} ${p.hue}` : <span className="warn">untagged</span>}<div className="muted">{(p.surfaces ?? []).join(", ")}</div></td>
                   <td className="num">{p.length_in && p.width_in ? `${p.length_in} × ${p.width_in}` : "—"}</td>
-                  <td className="row" style={{ justifyContent: "flex-end" }}>
+                  <td><div className="row" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
                     <button className="sm" onClick={() => startEdit(p)}>Edit</button>
-                    <button className="sm" onClick={() => toggle(p)}>{p.active ? "Hide" : "Show"}</button>
-                    {isOwner && <button className="sm ghost" onClick={() => remove(p)}>Delete</button>}
-                  </td>
+                    <button className="sm ghost" onClick={() => toggle(p)}>{p.active ? "Hide" : "Show"}</button>
+                  </div></td>
                 </tr>
               ))}
             </tbody>

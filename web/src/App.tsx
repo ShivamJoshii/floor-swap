@@ -102,7 +102,7 @@ export default function App() {
   if (!membership) return <Onboard onDone={loadMemberships} toast={toast} email={session.user.email ?? ""} onSupplier={() => setMode("supplier")} />;
 
   const ctx: Ctx = { session, membership, balance, hasAllowance: !!(usage && usage.plan_status === "active" && usage.used_this_period < usage.renders_per_month), watermark: !!usage?.watermark, refreshBalance, reloadStore: loadMemberships, toast, isAdmin, proposal, setProposal, goTo: setTab };
-  const tabs: [Tab, string][] = [["generate", "Create"], ["proposal", proposal.length ? `Proposal · ${proposal.length}` : "Proposal"], ["products", "Products"], ["marketplace", "Marketplace"]];
+  const tabs: [Tab, string][] = [["generate", "Create"], ["proposal", proposal.length ? `Proposal · ${proposal.length}` : "Proposal"], ["products", "Products"], ["marketplace", "Suppliers"]];
   const menu: [Tab, string][] = [["credits", "Plan & billing"], ["team", "Store settings"], ["supplier", "Sell wholesale"]];
   if (isAdmin) menu.push(["admin", "Admin"]);
   const pill = usage?.plan_status === "active" && usage.renders_per_month > 0

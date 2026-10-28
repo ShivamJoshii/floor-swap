@@ -19,6 +19,8 @@ export default function Admin({ ctx }: { ctx: Ctx }) {
   const [ns, setNs] = useState({ name: "", city: "Edmonton", email: "", plan: "", credits: "10" });
   const [nsBusy, setNsBusy] = useState(false);
   const [nsMsg, setNsMsg] = useState<string | null>(null);
+  const [reqs, setReqs] = useState<{ id: string; name: string; website: string | null; note: string | null; status: string; created_at: string; store?: { name: string } | null }[]>([]);
+  async function setReqStatus(id: string, status: string) { await supabase.from("supplier_requests").update({ status, updated_at: new Date().toISOString() }).eq("id", id); load(); }
 
   async function createStore(e: React.FormEvent) {
     e.preventDefault(); setNsBusy(true); setNsMsg(null);
@@ -30,6 +32,8 @@ export default function Admin({ ctx }: { ctx: Ctx }) {
   }
 
   const load = useCallback(async () => {
+    const { data: rq } = await supabase.from("supplier_requests").select("*, store:stores(name)").order("created_at", { ascending: false }).limit(100);
+    setReqs((rq ?? []) as typeof reqs);
     const [{ data: s }, { data: p }, { data: pl }, { data: st }] = await Promise.all([supabase.rpc("admin_stores"), supabase.from("credit_packs").select("*").order("sort"), supabase.from("plans").select("id, name, monthly_cents").order("sort"), supabase.from("stores").select("id, plan_id, plan_status")]);
     const planMap = new Map(((st ?? []) as { id: string; plan_id: string | null; plan_status: string | null }[]).map((x) => [x.id, x]));
     setStores(((s ?? []) as StoreRow[]).map((r) => ({ ...r, plan_id: planMap.get(r.id)?.plan_id ?? null, plan_status: planMap.get(r.id)?.plan_status ?? null }))); setPacks((p ?? []) as Pack[]); setPlans((pl ?? []) as Plan[]);
@@ -85,6 +89,22 @@ export default function Admin({ ctx }: { ctx: Ctx }) {
       </form>
       </div>
 
+      <div style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>
+      <div className="card">
+        <h2>Supplier requests{reqs.filter((r) => r.status === "open").length ? ` · ${reqs.filter((r) => r.status === "open").length} open` : ""}</h2>
+        {!reqs.length && <p className="small muted">None yet.</p>}
+        {reqs.length > 0 && <div className="table-wrap"><table>
+          <thead><tr><th>Supplier</th><th>Store</th><th>Status</th><th></th></tr></thead>
+          <tbody>{reqs.map((r) => (
+            <tr key={r.id}>
+              <td><strong>{r.name}</strong><div className="small muted">{[r.website, r.note].filter(Boolean).join(" · ")}</div></td>
+              <td className="small">{r.store?.name}<div className="muted">{new Date(r.created_at).toLocaleDateString("en-CA")}</div></td>
+              <td><span className={"status " + (r.status === "added" ? "done" : r.status === "declined" ? "failed" : "")}>{r.status}</span></td>
+              <td><div className="row" style={{ flexWrap: "nowrap" }}>{r.status !== "added" && <button className="sm" onClick={() => setReqStatus(r.id, "added")}>Mark added</button>}{r.status === "open" && <button className="sm ghost" onClick={() => setReqStatus(r.id, "declined")}>Decline</button>}</div></td>
+            </tr>))}
+          </tbody>
+        </table></div>}
+      </div>
       <div className="card">
         <h2>Stores</h2>
         <div className="table-wrap"><table>
@@ -103,6 +123,7 @@ export default function Admin({ ctx }: { ctx: Ctx }) {
             ))}
           </tbody>
         </table></div>
+      </div>
       </div>
     </div>
   );

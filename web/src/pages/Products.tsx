@@ -305,7 +305,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
       </div>
       {(importMsg || tagMsg) && <p className="small">{importMsg ?? tagMsg}</p>}
       {adding && <form className="card" onSubmit={save} style={{ maxWidth: 640 }}>
-        <h2>New product</h2>
+        <div className="row" style={{ justifyContent: "space-between" }}><h2>New product</h2><button type="button" className="sm ghost" onClick={() => ctx.goTo("marketplace")}>Browse suppliers →</button></div>
         <label className="f">Search supplier catalog
           <input type="text" value={catQ} onChange={(e) => setCatQ(e.target.value)} placeholder="Name or SKU" />
         </label>
@@ -438,7 +438,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
             
           </form>
         )}
-        {!shown.length && <p className="muted">{list.length ? "Nothing matches." : "No products yet. Add the 5–10 you sell most."}</p>}
+        {!shown.length && <p className="muted">{list.length ? "Nothing matches." : <>No products yet. <button type="button" className="sm ghost" style={{ padding: "0 4px" }} onClick={() => ctx.goTo("marketplace")}>Browse suppliers</button> or add your own.</>}</p>}
         {shown.length > 0 && (
           <div className="table-wrap"><table>
             <thead><tr><th></th><th>Name</th><th>Supplier</th><th>Colour · where</th><th className="num">Size (in)</th><th></th></tr></thead>

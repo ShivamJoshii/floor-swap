@@ -21,12 +21,21 @@ export default function Marketplace({ ctx }: { ctx: Ctx }) {
   const [open, setOpen] = useState<Thread | null>(null);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [reply, setReply] = useState("");
+  const [mine, setMine] = useState<Set<string>>(new Set());
+  const [reqs, setReqs] = useState<{ id: string; name: string; status: string; created_at: string }[]>([]);
+  const [req, setReq] = useState({ name: "", website: "", note: "" });
+  const [adding, setAdding] = useState<string | null>(null);
+  const [reqOpen, setReqOpen] = useState(false);
 
   const load = useCallback(async () => {
-    const [{ data }, { data: t }] = await Promise.all([
+    const [{ data }, { data: t }, { data: mp }, { data: rq }] = await Promise.all([
       supabase.from("marketplace_products").select("*").order("updated_at", { ascending: false }).limit(3000),
       supabase.from("inquiries").select("*, supplier:suppliers(name), product:supplier_products(name, sku)").eq("from_store_id", store.id).order("updated_at", { ascending: false }).limit(50),
+      supabase.from("products").select("supplier_product_id").eq("store_id", store.id).not("supplier_product_id", "is", null),
+      supabase.from("supplier_requests").select("id, name, status, created_at").eq("store_id", store.id).order("created_at", { ascending: false }),
     ]);
+    setMine(new Set(((mp ?? []) as { supplier_product_id: string }[]).map((x) => x.supplier_product_id)));
+    setReqs((rq ?? []) as typeof reqs);
     setItems(((data ?? []) as unknown as MP[]).map((p) => ({ ...p, swatch_path: p.swatch_path ?? "", store_id: "", price_per_sqft: null, active: true, created_at: p.updated_at })));
     setThreads((t ?? []) as Thread[]);
   }, [store.id]);
@@ -39,6 +48,7 @@ export default function Marketplace({ ctx }: { ctx: Ctx }) {
     return [...m.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [items]);
 
+  const counts = useMemo(() => { const m = new Map<string, number>(); items.forEach((p) => m.set(p.supplier_id!, (m.get(p.supplier_id!) ?? 0) + 1)); return m; }, [items]);
   const visible = applyFilters(items, filters) as MP[];
   const shown = showAll ? visible : visible.slice(0, 72);
   useEffect(() => {
@@ -59,8 +69,15 @@ export default function Marketplace({ ctx }: { ctx: Ctx }) {
     if (error) { setNote(error.message); return; }
     ctx.toast("Sent. The supplier sees it in their Leads."); setMsg(""); setSel(null); load(); void data;
   }
+  async function requestSupplier(e: React.FormEvent) {
+    e.preventDefault(); if (!req.name.trim()) return;
+    const { error } = await supabase.from("supplier_requests").insert({ store_id: store.id, name: req.name.trim(), website: req.website.trim() || null, note: req.note.trim() || null });
+    if (error) { ctx.toast(error.message); return; }
+    ctx.toast(`Requested ${req.name.trim()}. We'll let you know when it's added.`); setReq({ name: "", website: "", note: "" }); load();
+  }
   async function addToMyProducts(p: MP) {
-    setBusy(true);
+    if (mine.has(p.id)) return;
+    setBusy(true); setAdding(p.id);
     try {
       let path = "";
       if (p.swatch_path) {
@@ -72,8 +89,9 @@ export default function Marketplace({ ctx }: { ctx: Ctx }) {
         supplier_id: p.supplier_id, supplier_product_id: p.id, swatch_path: path, surfaces: p.surfaces ?? ["floor"], rooms: p.rooms ?? [], tone: p.tone, hue: p.hue, tags: p.tags ?? [], created_by: ctx.session.user.id });
       if (error) throw new Error(error.message);
       ctx.toast(`${p.name} added to your products.`);
+      setMine((cur) => new Set(cur).add(p.id));
     } catch (e) { ctx.toast(e instanceof Error ? e.message : String(e)); }
-    setBusy(false);
+    setBusy(false); setAdding(null);
   }
   async function openThread(t: Thread) {
     setOpen(t); const { data } = await supabase.from("inquiry_messages").select("*").eq("inquiry_id", t.id).order("created_at"); setMsgs((data ?? []) as Msg[]);
@@ -88,11 +106,43 @@ export default function Marketplace({ ctx }: { ctx: Ctx }) {
   const unclaimed = (p: MP) => !p.supplier_claimed;
 
   return (
-    <div className="two">
+    <div className={sel || open ? "two" : "stack"}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>
         <div className="card">
-          <h2>Marketplace · {visible.length}{visible.length !== items.length ? ` of ${items.length}` : ""} products from {suppliers.length} suppliers</h2>
-          <p className="small muted">Product specs and swatches shared by suppliers and stores on Floor Swap. No prices here; ask the supplier.</p>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <h2>Suppliers</h2>
+            {filters.supplier && <button type="button" className="sm ghost" onClick={() => setFilters({ ...filters, supplier: "" })}>All suppliers</button>}
+          </div>
+          <div className="sup-list">
+            {suppliers.map((su) => (
+              <button type="button" key={su.id} className={"sup" + (filters.supplier === su.id ? " on" : "")} onClick={() => { setFilters({ ...filters, supplier: filters.supplier === su.id ? "" : su.id }); setShowAll(false); }}>
+                <strong>{su.name}</strong><span className="small muted">{counts.get(su.id) ?? 0} products</span>
+              </button>
+            ))}
+            {reqs.filter((r) => r.status === "open").map((r) => <div key={r.id} className="sup pending"><strong>{r.name}</strong><span className="small muted">Requested</span></div>)}
+            <button type="button" className="sup add" onClick={() => { setSel(null); setOpen(null); setReqOpen(true); setTimeout(() => document.getElementById("reqName")?.focus(), 50); }}>
+              <strong>+ Request a supplier</strong><span className="small muted">Don't see yours?</span>
+            </button>
+          </div>
+        </div>
+        {reqOpen && (
+          <form className="card" onSubmit={requestSupplier} style={{ maxWidth: 560 }}>
+            <div className="row" style={{ justifyContent: "space-between" }}><h2>Request a supplier</h2><button type="button" className="sm ghost" onClick={() => setReqOpen(false)}>Close</button></div>
+            <p className="small muted">Tell us who you buy from. We'll load their catalog.</p>
+            <label className="f">Supplier name<input id="reqName" type="text" required value={req.name} onChange={(e) => setReq({ ...req, name: e.target.value })} placeholder="e.g. Olympia Tile" /></label>
+            <label className="f">Website (optional)<input type="text" value={req.website} onChange={(e) => setReq({ ...req, website: e.target.value })} placeholder="olympiatile.com" /></label>
+            <label className="f">Notes (optional)<input type="text" value={req.note} onChange={(e) => setReq({ ...req, note: e.target.value })} placeholder="Lines you carry, rep contact…" /></label>
+            <button className="primary">Send request</button>
+            {reqs.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span className="small muted">Your requests</span>
+                {reqs.map((r) => <div key={r.id} className="row small" style={{ justifyContent: "space-between" }}><span>{r.name}</span><span className={"status " + (r.status === "added" ? "done" : "")}>{r.status === "open" ? "requested" : r.status}</span></div>)}
+              </div>
+            )}
+          </form>
+        )}
+        <div className="card">
+          <h2>{filters.supplier ? suppliers.find((x) => x.id === filters.supplier)?.name : "All products"} · {visible.length}</h2>
           <ProductFilter list={items} suppliers={suppliers} value={filters} onChange={(f) => { setFilters(f); setShowAll(false); }} />
           <div className="catalog" style={{ maxHeight: "none" }}>
             {shown.map((p) => (
@@ -100,6 +150,9 @@ export default function Marketplace({ ctx }: { ctx: Ctx }) {
                 <img src={urls[p.id]} alt="" />
                 <div className="nm">{p.name}</div>
                 <div className="dm">{p.supplier_name}{p.length_in && p.width_in ? ` · ${p.length_in}×${p.width_in}` : ""}</div>
+                <button type="button" className={"sm add-btn" + (mine.has(p.id) ? " done" : "")} disabled={mine.has(p.id) || adding === p.id} onClick={(e) => { e.stopPropagation(); addToMyProducts(p); }}>
+                  {mine.has(p.id) ? "✓ Added" : adding === p.id ? <span className="spinner" /> : "+ Add"}
+                </button>
               </div>
             ))}
           </div>
@@ -142,8 +195,7 @@ export default function Marketplace({ ctx }: { ctx: Ctx }) {
               </div>
             </div>
             <div className="row">
-              <button className="sm" disabled={busy} onClick={() => addToMyProducts(sel)}>Add to my products</button>
-              <span className="small muted">Copies the swatch + specs into your catalog so you can render it.</span>
+              <button className="sm primary" disabled={busy || mine.has(sel.id)} onClick={() => addToMyProducts(sel)}>{mine.has(sel.id) ? "✓ In your products" : "Add to my products"}</button>
             </div>
             {unclaimed(sel) ? (
               <p className="small muted">{sel.supplier_name} hasn't joined Floor Swap yet, so you can't message them here. Know someone there? Tell them to sign up as a supplier and claim their catalog.</p>
@@ -168,13 +220,7 @@ export default function Marketplace({ ctx }: { ctx: Ctx }) {
             <div className="row"><input type="text" className="grow" value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Reply…" onKeyDown={(e) => { if (e.key === "Enter") sendReply(); }} /><button className="primary sm" onClick={sendReply}>Send</button></div>
           </div>
         )}
-        {!sel && !open && (
-          <div className="card">
-            <h2>How this works</h2>
-            <p className="small">Every supplier and store on Floor Swap can list what they sell. Pick a product to see specs, add it to your catalog to render it on a customer's room, or message the supplier for stock and dealer pricing.</p>
-            <p className="small">Want to be found here too? Go to <button className="sm ghost" style={{ padding: "0 4px" }} onClick={() => ctx.goTo("supplier")}>Supplier</button> and list what you wholesale.</p>
-          </div>
-        )}
+
       </div>
     </div>
   );

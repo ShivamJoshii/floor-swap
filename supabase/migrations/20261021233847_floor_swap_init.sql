@@ -1,7 +1,6 @@
 -- Floor Swap: stores, products, renders, prepaid credits.
 create extension if not exists pgcrypto;
 
--- ---------- settings & packs ----------
 create table if not exists public.app_settings (
   key text primary key,
   value jsonb not null,
@@ -24,7 +23,6 @@ create table if not exists public.credit_packs (
   active boolean not null default true,
   sort int not null default 0
 );
--- Placeholder tiers: 2x provider cost. Edit freely.
 insert into public.credit_packs (id, name, credits, price_cents, sort) values
   ('starter', 'Starter', 50, 2000, 1),
   ('growth',  'Growth', 200, 7000, 2),
@@ -36,7 +34,6 @@ create table if not exists public.platform_admins (
   created_at timestamptz not null default now()
 );
 
--- ---------- tenants ----------
 create table if not exists public.stores (
   id uuid primary key default gen_random_uuid(),
   name text not null,
@@ -66,7 +63,6 @@ create table if not exists public.store_invites (
 );
 create index if not exists store_invites_email_idx on public.store_invites(lower(email));
 
--- ---------- catalog ----------
 create table if not exists public.products (
   id uuid primary key default gen_random_uuid(),
   store_id uuid not null references public.stores(id) on delete cascade,
@@ -84,7 +80,6 @@ create table if not exists public.products (
 );
 create index if not exists products_store_idx on public.products(store_id, active);
 
--- ---------- renders ----------
 create table if not exists public.renders (
   id uuid primary key default gen_random_uuid(),
   store_id uuid not null references public.stores(id) on delete cascade,
@@ -106,7 +101,6 @@ create table if not exists public.renders (
 );
 create index if not exists renders_store_idx on public.renders(store_id, created_at desc);
 
--- ---------- credits ----------
 create table if not exists public.credit_ledger (
   id bigserial primary key,
   store_id uuid not null references public.stores(id) on delete cascade,
@@ -120,7 +114,6 @@ create table if not exists public.credit_ledger (
 );
 create index if not exists credit_ledger_store_idx on public.credit_ledger(store_id, created_at desc);
 
--- ---------- helpers ----------
 create or replace function public.is_member(p_store uuid)
 returns boolean language sql stable security definer set search_path = public as $$
   select exists (select 1 from public.store_members where store_id = p_store and user_id = auth.uid());
@@ -150,7 +143,6 @@ returns int language sql stable security definer set search_path = public as $$
   select coalesce(sum(delta), 0)::int from public.credit_ledger where store_id = p_store;
 $$;
 
--- Creates a store for the calling user, makes them owner, grants trial credits.
 create or replace function public.create_store(p_name text, p_city text default null)
 returns uuid language plpgsql security definer set search_path = public as $$
 declare
@@ -169,7 +161,6 @@ begin
 end;
 $$;
 
--- Accept any pending invites for the calling user's email.
 create or replace function public.accept_invites()
 returns int language plpgsql security definer set search_path = public as $$
 declare
@@ -188,7 +179,6 @@ begin
 end;
 $$;
 
--- Atomic debit. Raises if the balance is too low. Service role or member may call.
 create or replace function public.consume_credits(p_store uuid, p_amount int, p_render uuid)
 returns int language plpgsql security definer set search_path = public as $$
 declare
@@ -206,7 +196,6 @@ begin
 end;
 $$;
 
--- Platform admin: add purchased/adjusted credits to any store.
 create or replace function public.grant_credits(p_store uuid, p_amount int, p_reason text default 'purchase', p_pack text default null, p_note text default null)
 returns int language plpgsql security definer set search_path = public as $$
 begin
@@ -218,7 +207,6 @@ begin
 end;
 $$;
 
--- Platform admin overview.
 create or replace function public.admin_stores()
 returns table (id uuid, name text, city text, created_at timestamptz, balance int, members int, renders int, last_render timestamptz)
 language sql stable security definer set search_path = public as $$
@@ -232,7 +220,6 @@ language sql stable security definer set search_path = public as $$
   order by s.created_at desc;
 $$;
 
--- ---------- RLS ----------
 alter table public.app_settings enable row level security;
 alter table public.credit_packs enable row level security;
 alter table public.platform_admins enable row level security;
@@ -245,26 +232,19 @@ alter table public.credit_ledger enable row level security;
 
 create policy "packs readable" on public.credit_packs for select to authenticated using (active);
 create policy "admins see admins" on public.platform_admins for select to authenticated using (user_id = auth.uid());
-
 create policy "members read store" on public.stores for select to authenticated using (public.is_member(id) or public.is_platform_admin());
 create policy "owners update store" on public.stores for update to authenticated using (public.is_owner(id)) with check (public.is_owner(id));
-
 create policy "members read members" on public.store_members for select to authenticated using (public.is_member(store_id) or public.is_platform_admin());
 create policy "owners remove members" on public.store_members for delete to authenticated using (public.is_owner(store_id) and user_id <> auth.uid());
-
 create policy "owners manage invites" on public.store_invites for all to authenticated using (public.is_owner(store_id)) with check (public.is_owner(store_id));
-
 create policy "members read products" on public.products for select to authenticated using (public.is_member(store_id));
 create policy "members add products" on public.products for insert to authenticated with check (public.is_member(store_id));
 create policy "members edit products" on public.products for update to authenticated using (public.is_member(store_id)) with check (public.is_member(store_id));
 create policy "owners delete products" on public.products for delete to authenticated using (public.is_owner(store_id));
-
 create policy "members read renders" on public.renders for select to authenticated using (public.is_member(store_id));
 create policy "members update render notes" on public.renders for update to authenticated using (public.is_member(store_id)) with check (public.is_member(store_id));
-
 create policy "members read ledger" on public.credit_ledger for select to authenticated using (public.is_member(store_id) or public.is_platform_admin());
 
--- ---------- storage ----------
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types) values
   ('swatches', 'swatches', false, 15728640, array['image/jpeg','image/png','image/webp']),
   ('rooms',    'rooms',    false, 20971520, array['image/jpeg','image/png','image/webp','image/heic']),
@@ -279,11 +259,9 @@ create policy "members update swatches" on storage.objects for update to authent
   using (bucket_id = 'swatches' and public.is_member(public.path_store(name)));
 create policy "members delete swatches" on storage.objects for delete to authenticated
   using (bucket_id = 'swatches' and public.is_member(public.path_store(name)));
-
 create policy "members read rooms" on storage.objects for select to authenticated
   using (bucket_id = 'rooms' and public.is_member(public.path_store(name)));
 create policy "members write rooms" on storage.objects for insert to authenticated
   with check (bucket_id = 'rooms' and public.is_member(public.path_store(name)));
-
 create policy "members read renders" on storage.objects for select to authenticated
   using (bucket_id = 'renders' and public.is_member(public.path_store(name)));

@@ -125,8 +125,8 @@ Deno.serve(async (req: Request) => {
   if (body.product_ids?.length) q = q.in("id", body.product_ids.slice(0, 50));
   // Explicit ids retry earlier failures; the "all missing" sweep skips them so it can't loop on a bad swatch.
   if (!body.force) q = q.is("showcase_path", null).or(body.product_ids?.length
-    ? `showcase_status.is.null,showcase_status.eq.failed,showcase_updated_at.lt.${stale}`
-    : `showcase_status.is.null,showcase_updated_at.lt.${stale}`);
+    ? `showcase_status.is.null,showcase_status.eq.failed,and(showcase_status.eq.running,showcase_updated_at.lt.${stale})`
+    : `showcase_status.is.null,and(showcase_status.eq.running,showcase_updated_at.lt.${stale})`);
   const { data: picked, error: perr } = await q.order("created_at").limit(limit);
   if (perr) return json({ error: perr.message }, 500);
   const todo = (picked ?? []) as P[];

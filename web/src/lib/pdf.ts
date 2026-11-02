@@ -122,15 +122,16 @@ export async function buildProposalPdf(opts: { store: Store; lead: { name: strin
   return await doc.save();
 }
 
-// ---------- Builder sheet: room photo + specs per product, no customer photo ----------
+// ---------- Builder sheet: one page per room (a photo with several products in it) + specs ----------
 
 export type SheetProduct = {
-  name: string; sku: string | null; type: string; length_in: number | null; width_in: number | null;
+  spot?: string | null; name: string; sku: string | null; type: string; length_in: number | null; width_in: number | null;
   finish?: string | null; collection?: string | null; colour_family?: string | null; price_per_sqft?: number | null;
-  roomUrl: string | null; swatchUrl: string | null;
+  swatchUrl: string | null;
 };
+export type SheetRoom = { label: string; photoUrl: string | null; products: SheetProduct[] };
 
-export function specRows(p: Omit<SheetProduct, "roomUrl" | "swatchUrl">, showPrices: boolean): [string, string][] {
+export function specRows(p: Omit<SheetProduct, "swatchUrl">, showPrices: boolean): [string, string][] {
   const rows: [string, string][] = [
     ["Type", typeText(p.type)],
     ["Size", p.length_in && p.width_in ? `${p.length_in}" × ${p.width_in}"` : ""],
@@ -143,8 +144,8 @@ export function specRows(p: Omit<SheetProduct, "roomUrl" | "swatchUrl">, showPri
   return rows.filter(([, v]) => v);
 }
 
-export async function buildBuilderPdf(opts: { store: Store; builder: { name: string; company: string }; note: string; showPrices: boolean; items: SheetProduct[]; logoUrl?: string | null }) {
-  const { store, builder, items } = opts;
+export async function buildBuilderPdf(opts: { store: Store; builder: { name: string; company: string }; note: string; showPrices: boolean; rooms: SheetRoom[]; logoUrl?: string | null }) {
+  const { store, builder, rooms } = opts;
   const who = builder.company || builder.name;
   const doc = await PDFDocument.create();
   doc.setTitle(`${store.name} — product sheet${who ? ` for ${who}` : ""}`);
@@ -154,6 +155,7 @@ export async function buildBuilderPdf(opts: { store: Store; builder: { name: str
   const date = new Date().toLocaleDateString("en-CA", { year: "numeric", month: "long", day: "numeric" });
   const contact = [store.phone, store.email, store.website, store.address].filter(Boolean).join("   ·   ");
   const logo = await fetchImage(doc, opts.logoUrl);
+  const nProducts = new Set(rooms.flatMap((r) => r.products.map((p) => p.name))).size;
   const header = (page: PDFPage, right: string) => {
     page.drawRectangle({ x: 0, y: PAGE_H - 6, width: PAGE_W, height: 6, color: accent });
     if (logo) drawFit(page, logo, M, PAGE_H - 54, 120, 30);
@@ -166,7 +168,7 @@ export async function buildBuilderPdf(opts: { store: Store; builder: { name: str
     wrap(text, font, 8, PAGE_W - 2 * M).slice(0, 2).forEach((l, i) => page.drawText(l, { x: M, y: 44 - i * 11, size: 8, font, color: muted }));
   };
 
-  // Cover: title, note, a contact strip and up to 4 room photos as a teaser grid.
+  // Cover: title, note, and the room photos as a grid.
   {
     const page = doc.addPage([PAGE_W, PAGE_H]);
     header(page, date);
@@ -174,38 +176,44 @@ export async function buildBuilderPdf(opts: { store: Store; builder: { name: str
     page.drawText(store.name, { x: M, y, size: 30, font: bold, color: ink }); y -= 22;
     if (store.tagline) { page.drawText(store.tagline, { x: M, y, size: 12, font, color: muted }); y -= 18; }
     y -= 14;
-    page.drawText(who ? `Product sheet for ${who}` : "Product sheet", { x: M, y, size: 16, font: bold, color: accent }); y -= 16;
-    page.drawText(`${items.length} product${items.length === 1 ? "" : "s"} · room photo and specs for each`, { x: M, y, size: 11, font, color: muted }); y -= 22;
+    page.drawText(who ? `Finishes for ${who}` : "Finishes", { x: M, y, size: 16, font: bold, color: accent }); y -= 16;
+    page.drawText(`${rooms.length} room${rooms.length === 1 ? "" : "s"} · ${nProducts} product${nProducts === 1 ? "" : "s"}`, { x: M, y, size: 11, font, color: muted }); y -= 22;
     if (opts.note.trim()) { for (const l of wrap(opts.note.trim(), font, 11, PAGE_W - 2 * M).slice(0, 5)) { page.drawText(l, { x: M, y, size: 11, font, color: ink }); y -= 15; } y -= 8; }
-    const grid = items.slice(0, 4); const gw = (PAGE_W - 2 * M - 12) / 2, gh = gw * 0.75;
+    const grid = rooms.slice(0, 4); const gw = (PAGE_W - 2 * M - 12) / 2, gh = gw * 0.75;
     for (let i = 0; i < grid.length; i++) {
-      const img = await fetchImage(doc, grid[i].roomUrl ?? grid[i].swatchUrl); if (!img) continue;
+      const img = await fetchImage(doc, grid[i].photoUrl ?? grid[i].products[0]?.swatchUrl); if (!img) continue;
       const gx = M + (i % 2) * (gw + 12), gy = y - gh - Math.floor(i / 2) * (gh + 26);
       if (gy < 80) break;
       drawFit(page, img, gx, gy, gw, gh);
-      page.drawText(grid[i].name.slice(0, 48), { x: gx, y: gy - 13, size: 9, font, color: muted });
+      page.drawText(grid[i].label.slice(0, 48), { x: gx, y: gy - 13, size: 9, font, color: muted });
     }
     footer(page, contact);
   }
 
-  // One page per product
-  for (let i = 0; i < items.length; i++) {
-    const it = items[i];
+  // One page per room: photo, then a row per product (swatch, where it goes, name, specs).
+  for (let i = 0; i < rooms.length; i++) {
+    const room = rooms[i];
     const page = doc.addPage([PAGE_W, PAGE_H]);
-    header(page, `${i + 1} of ${items.length}`);
-    let y = PAGE_H - 80;
-    const room = await fetchImage(doc, it.roomUrl);
-    if (room) { const r = drawFit(page, room, M, y - 390, PAGE_W - 2 * M, 390); y = r.y - 24; } else y -= 10;
-    const sw = await fetchImage(doc, it.swatchUrl);
-    const textX = sw ? M + 140 : M;
-    if (sw) { const r = drawFit(page, sw, M, y - 120, 124, 120); page.drawRectangle({ x: r.x, y: r.y, width: r.width, height: r.height, borderColor: line, borderWidth: 0.5 }); }
-    page.drawText(it.name, { x: textX, y: y - 18, size: 18, font: bold, color: ink });
-    let ty = y - 42;
-    for (const [k, v] of specRows(it, opts.showPrices)) {
-      page.drawText(k.toUpperCase(), { x: textX, y: ty, size: 8, font: bold, color: muted });
-      page.drawText(v.slice(0, 60), { x: textX + 80, y: ty, size: 11, font, color: ink }); ty -= 17;
+    header(page, `${i + 1} of ${rooms.length}`);
+    let y = PAGE_H - 74;
+    page.drawText(room.label, { x: M, y: y - 16, size: 18, font: bold, color: ink }); y -= 28;
+    const photo = await fetchImage(doc, room.photoUrl);
+    const photoH = room.products.length > 2 ? 300 : 350;
+    if (photo) { const r = drawFit(page, photo, M, y - photoH, PAGE_W - 2 * M, photoH); y = r.y - 18; } else y -= 6;
+    const rowH = Math.min(110, Math.max(70, (y - 72) / Math.max(1, room.products.length)));
+    for (const p of room.products) {
+      const sw = await fetchImage(doc, p.swatchUrl);
+      const s = rowH - 14;
+      if (sw) { const r = drawFit(page, sw, M, y - s, s, s); page.drawRectangle({ x: r.x, y: r.y, width: r.width, height: r.height, borderColor: line, borderWidth: 0.5 }); }
+      const tx = M + s + 14;
+      if (p.spot) page.drawText(p.spot.toUpperCase(), { x: tx, y: y - 10, size: 8, font: bold, color: accent });
+      page.drawText(p.name.slice(0, 50), { x: tx, y: y - 26, size: 13, font: bold, color: ink });
+      const specs = specRows(p, opts.showPrices).map(([k, v]) => `${k}: ${v}`).join("   ·   ");
+      wrap(specs, font, 9, PAGE_W - M - tx).slice(0, Math.max(1, Math.floor((s - 30) / 12))).forEach((l, j) => page.drawText(l, { x: tx, y: y - 42 - j * 12, size: 9, font, color: muted }));
+      y -= rowH;
+      if (y < 80) break;
     }
-    footer(page, (room ? "Room photo is an AI-styled preview made from the actual product sample. " : "") + "Confirm colour with a physical sample before ordering. " + (store.phone ? `Questions or samples: ${store.phone}` : ""));
+    footer(page, (photo ? "Room photo is an AI-styled preview made from the actual product samples. " : "") + "Confirm colour with a physical sample before ordering. " + (store.phone ? `Questions or samples: ${store.phone}` : ""));
   }
 
   // Closing contact page

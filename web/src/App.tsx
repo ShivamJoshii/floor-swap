@@ -12,8 +12,9 @@ import Team from "./pages/Team";
 import Admin from "./pages/Admin";
 import Marketplace from "./pages/Marketplace";
 import SupplierPage from "./pages/SupplierPage";
+import Builders from "./pages/Builders";
 
-type Tab = "generate" | "proposal" | "products" | "marketplace" | "supplier" | "credits" | "team" | "admin";
+type Tab = "generate" | "proposal" | "builders" | "products" | "marketplace" | "supplier" | "credits" | "team" | "admin";
 
 export type Ctx = {
   session: Session;
@@ -102,7 +103,7 @@ export default function App() {
   if (!membership) return <Onboard onDone={loadMemberships} toast={toast} email={session.user.email ?? ""} onSupplier={() => setMode("supplier")} />;
 
   const ctx: Ctx = { session, membership, balance, hasAllowance: !!(usage && usage.plan_status === "active" && usage.used_this_period < usage.renders_per_month), watermark: !!usage?.watermark, refreshBalance, reloadStore: loadMemberships, toast, isAdmin, proposal, setProposal, goTo: setTab };
-  const tabs: [Tab, string][] = [["generate", "Create"], ["proposal", proposal.length ? `Proposal · ${proposal.length}` : "Proposal"], ["products", "Products"], ["marketplace", "Suppliers"]];
+  const tabs: [Tab, string][] = [["generate", "Create"], ["proposal", proposal.length ? `Proposal · ${proposal.length}` : "Proposal"], ["builders", "Builders"], ["products", "Products"], ["marketplace", "Suppliers"]];
   const menu: [Tab, string][] = [["credits", "Plan & billing"], ["team", "Store settings"], ["supplier", "Sell wholesale"]];
   if (isAdmin) menu.push(["admin", "Admin"]);
   const pill = usage?.plan_status === "active" && usage.renders_per_month > 0
@@ -135,6 +136,7 @@ export default function App() {
       <main className="page">
         {tab === "generate" && <Generate ctx={ctx} />}
         {tab === "proposal" && <Proposal ctx={ctx} />}
+        {tab === "builders" && <Builders ctx={ctx} />}
         {tab === "products" && <Products ctx={ctx} />}
         {tab === "marketplace" && <Marketplace ctx={ctx} />}
         {tab === "supplier" && <SupplierPage ctx={ctx} />}

@@ -1,3 +1,4 @@
+import { queueShowcase } from "../lib/showcase";
 import { useCallback, useEffect, useState } from "react";
 import { useRef } from "react";
 import { supabase, signedUrl, type Product, type Supplier, type SupplierProduct } from "../lib/supabase";
@@ -175,6 +176,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
       };
       const { error } = await supabase.from("products").insert(row);
       if (error) throw new Error(error.message);
+      queueShowcase(store, [id]);
       if (form.share && row.supplier_id && row.sku) await shareToCatalog({ ...row, active: true, created_at: "" } as Product, blob);
       ctx.toast(`${form.name} added.`);
       setForm(empty); setBmp(null); setQuad(null); setQuality(null); setAdding(false);
@@ -201,7 +203,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
       }
       const existingNames = new Set(list.map((p) => p.name.toLowerCase()));
       const existingSkus = new Set(list.filter((p) => p.sku && p.supplier_id).map((p) => `${p.supplier_id}:${p.sku!.toLowerCase()}`));
-      let done = 0, skipped = 0, shared = 0; const errors: string[] = [];
+      let done = 0, skipped = 0, shared = 0; const errors: string[] = []; const newIds: string[] = [];
       for (let idx = 0; idx < items.length; idx++) {
         const it = items[idx];
         if (!it.name || !it.jpg_b64) { skipped++; continue; }
@@ -219,7 +221,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
           tone: it.tone ?? null, hue: it.hue ?? null, surfaces: it.surfaces?.length ? it.surfaces : ["floor"], rooms: it.rooms ?? [], tags: it.tags ?? [] };
         const { error } = await supabase.from("products").insert(row);
         if (error) { errors.push(`${it.name}: ${error.message}`); continue; }
-        done++; if (dupKey) existingSkus.add(dupKey); existingNames.add(it.name.toLowerCase());
+        done++; newIds.push(id); if (dupKey) existingSkus.add(dupKey); existingNames.add(it.name.toLowerCase());
         if (supplierId && it.sku) {
           // Share to the supplier catalog (info + swatch, no price). Skip silently if it already exists.
           const { data: ex } = await supabase.from("supplier_products").select("id").eq("supplier_id", supplierId).eq("sku", it.sku).maybeSingle();
@@ -232,6 +234,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
           }
         }
       }
+      queueShowcase(store, newIds);
       setImportMsg(`Imported ${done}${shared ? `, ${shared} shared to supplier catalog` : ""}${skipped ? `, skipped ${skipped} already there` : ""}${errors.length ? `, ${errors.length} failed: ${errors[0]}` : ""}.`);
       ctx.toast(`Imported ${done} products.`); load();
     } catch (e) { setImportMsg(e instanceof Error ? e.message : String(e)); }

@@ -1,3 +1,4 @@
+import { queueShowcase } from "../lib/showcase";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase, signedUrl, type Product, type Supplier } from "../lib/supabase";
 import ProductFilter, { applyFilters, emptyFilters, type Filters } from "../components/ProductFilter";
@@ -85,9 +86,11 @@ export default function Marketplace({ ctx }: { ctx: Ctx }) {
         const b = await (await fetch(u!)).blob(); path = `${store.id}/${crypto.randomUUID()}.jpg`;
         const up = await supabase.storage.from("swatches").upload(path, b, { contentType: "image/jpeg" }); if (up.error) throw new Error(up.error.message);
       } else throw new Error("This listing has no swatch yet.");
-      const { error } = await supabase.from("products").insert({ store_id: store.id, name: p.name, sku: p.sku, type: p.type, length_in: p.length_in, width_in: p.width_in, finish: p.finish, colour_family: p.colour_family, collection: p.collection,
+      const newId = crypto.randomUUID();
+      const { error } = await supabase.from("products").insert({ id: newId, store_id: store.id, name: p.name, sku: p.sku, type: p.type, length_in: p.length_in, width_in: p.width_in, finish: p.finish, colour_family: p.colour_family, collection: p.collection,
         supplier_id: p.supplier_id, supplier_product_id: p.id, swatch_path: path, surfaces: p.surfaces ?? ["floor"], rooms: p.rooms ?? [], tone: p.tone, hue: p.hue, tags: p.tags ?? [], created_by: ctx.session.user.id });
       if (error) throw new Error(error.message);
+      queueShowcase(store.id, [newId]);
       ctx.toast(`${p.name} added to your products.`);
       setMine((cur) => new Set(cur).add(p.id));
     } catch (e) { ctx.toast(e instanceof Error ? e.message : String(e)); }

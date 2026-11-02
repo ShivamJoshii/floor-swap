@@ -41,8 +41,7 @@ Deno.serve(async (req: Request) => {
     swatch_url: await sign("swatches", p.swatch_path),
   })));
 
-  // Fire-and-forget view counter.
-  svc.from("builder_sheets").update({ views: (sheet.views ?? 0) + 1, last_viewed_at: new Date().toISOString() }).eq("id", sheet.id).then(() => {});
+  await svc.from("builder_sheets").update({ views: (sheet.views ?? 0) + 1, last_viewed_at: new Date().toISOString() }).eq("id", sheet.id);
 
   return json({
     store: { ...store, logo_path: undefined, logo_url: await sign("brand", store?.logo_path ?? null) },

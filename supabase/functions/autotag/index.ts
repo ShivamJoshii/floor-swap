@@ -1,6 +1,8 @@
 // Floor Swap — autotag: fills colour, shade, vibe, look tags, rooms and surfaces for products and supplier catalogue rows
 // that have never been tagged. A scheduled sweep calls it every few minutes, so anything imported any way gets tagged.
 // POST { limit?: number, table?: "products" | "supplier_products", ids?: string[], force?: boolean }
+// POST { urls: { table, after?: string, limit?: number } } returns short-lived swatch links for an offline colour pass (no AI).
+// POST { colours: { table, items: [{ id, hue, tone }] } } stores that pass: colour and shade where empty, plus the name-and-size rules.
 // Auth: the sweep's x-autotag-token header (public.autotag_config), or a signed-in platform admin.
 // Returns { tagged: [...], failed: [...], remaining: { products, supplier_products }, model }
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -12,6 +14,8 @@ const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const GEMINI_KEY = Deno.env.get("GEMINI_KEY");
 const FAL_KEY = Deno.env.get("FAL_KEY");
 const MAX_TRIES = 3;
+/** The AI account itself is refusing (no key, no balance, rate limit). Not the row's fault: stop the batch and do not count a try. */
+const PROVIDER_DOWN = /\b(401|403|429)\b|exhausted balance|api key|quota|billing/i;
 const PARALLEL = 4;
 
 const HUES = ["white", "grey", "beige", "tan", "brown", "black", "blue", "green", "multi"];
@@ -177,9 +181,36 @@ Deno.serve(async (req: Request) => {
     if (user) { const { data: adm } = await svc.from("platform_admins").select("user_id").eq("user_id", user.id).maybeSingle(); allowed = !!adm; }
   }
   if (!allowed) return json({ error: "Not allowed." }, 403);
+  const body = await req.json().catch(() => ({})) as { limit?: number; table?: Table; ids?: string[]; force?: boolean; urls?: { table: Table; after?: string; limit?: number }; colours?: { table: Table; items: { id: string; hue: string; tone: string }[] } };
+  if (body.urls) {
+    const t = body.urls.table === "products" ? "products" : "supplier_products";
+    let q = svc.from(t).select("id, swatch_path").not("swatch_path", "is", null).order("id").limit(Math.min(250, Math.max(1, Number(body.urls.limit ?? 200))));
+    if (body.urls.after) q = q.gt("id", body.urls.after);
+    const { data, error } = await q;
+    if (error) return json({ error: error.message }, 500);
+    const rows = (data ?? []) as { id: string; swatch_path: string }[];
+    const signed = rows.length ? await svc.storage.from(t === "products" ? "swatches" : "catalog").createSignedUrls(rows.map((r) => r.swatch_path), 3600) : { data: [] };
+    return json({ items: rows.map((r, i) => ({ id: r.id, url: signed.data?.[i]?.signedUrl ?? null })) });
+  }
+  if (body.colours) {
+    // Colour measured elsewhere (pixel average, no AI). Fills colour and shade only where empty, plus the name-and-size rules. Vibe is left for the AI pass.
+    const t = body.colours.table === "products" ? "products" : "supplier_products";
+    const items = (body.colours.items ?? []).filter((x) => HUES.includes(x.hue) && TONES.includes(x.tone)).slice(0, 250);
+    const want = new Map(items.map((x) => [x.id, x]));
+    const { data, error } = await svc.from(t).select("id, name, type, collection, length_in, width_in, swatch_path, colour_family, tone, hue, surfaces, rooms, tags, tag_tries").in("id", [...want.keys()]);
+    if (error) return json({ error: error.message }, 500);
+    let updated = 0;
+    for (const r of (data ?? []) as unknown as Row[]) {
+      const c = want.get(r.id)!; const p = patch(r, null);
+      delete p.tagged_at; delete p.tag_error;
+      const hue = r.hue ?? c.hue, tone = r.tone ?? c.tone;
+      const { error: ue } = await svc.from(t).update({ ...p, hue, tone, colour_family: r.colour_family ?? `${tone} ${hue}` }).eq("id", r.id);
+      if (!ue) updated++;
+    }
+    return json({ updated });
+  }
   if (!GEMINI_KEY && !FAL_KEY) return json({ error: "No AI key (GEMINI_KEY or FAL_KEY)." }, 500);
 
-  const body = await req.json().catch(() => ({})) as { limit?: number; table?: Table; ids?: string[]; force?: boolean };
   const limit = Math.min(40, Math.max(1, Number(body.limit ?? 12)));
   const { data: settingsRows } = await svc.from("app_settings").select("key, value").in("key", ["tag_model", "tag_fal_model"]);
   const settings: Record<string, unknown> = {}; for (const s of settingsRows ?? []) settings[s.key] = s.value;
@@ -196,6 +227,7 @@ Deno.serve(async (req: Request) => {
     return (data ?? []) as unknown as Row[];
   };
 
+  let providerDown: string | null = null;
   const one = async (table: Table, r: Row): Promise<{ table: Table; id: string; name: string; hue?: string; tone?: string; vibes?: string[]; copied?: boolean; error?: string }> => {
     try {
       let look: Look | null = null; let copied = false;
@@ -224,6 +256,7 @@ Deno.serve(async (req: Request) => {
       return { table, id: r.id, name: r.name, hue: p.hue as string | undefined, tone: p.tone as string | undefined, vibes: p.vibes as string[] | undefined, copied };
     } catch (e) {
       const msg = (e instanceof Error ? e.message : String(e)).slice(0, 400);
+      if (PROVIDER_DOWN.test(msg)) { providerDown = msg; return { table, id: r.id, name: r.name, error: msg }; }
       await svc.from(table).update({ tag_error: msg, tag_tries: r.tag_tries + 1 }).eq("id", r.id);
       return { table, id: r.id, name: r.name, error: msg };
     }
@@ -237,13 +270,13 @@ Deno.serve(async (req: Request) => {
       for (const r of await pick(table, limit - todo.length)) todo.push([table, r]);
     }
     const results: Awaited<ReturnType<typeof one>>[] = [];
-    for (let i = 0; i < todo.length; i += PARALLEL) results.push(...await Promise.all(todo.slice(i, i + PARALLEL).map(([t, r]) => one(t, r))));
+    for (let i = 0; i < todo.length && !providerDown; i += PARALLEL) results.push(...await Promise.all(todo.slice(i, i + PARALLEL).map(([t, r]) => one(t, r))));
 
     const left = async (table: Table, c: SupabaseClient) => (await c.from(table).select("id", { count: "exact", head: true }).is("tagged_at", null).lt("tag_tries", MAX_TRIES)).count ?? 0;
     return json({
       tagged: results.filter((r) => !r.error), failed: results.filter((r) => r.error),
       remaining: { products: await left("products", svc), supplier_products: await left("supplier_products", svc) },
-      model: workingModel ?? (GEMINI_KEY ? null : falModel),
+      model: workingModel ?? (GEMINI_KEY ? null : falModel), provider_down: providerDown,
     });
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : String(e) }, 500);

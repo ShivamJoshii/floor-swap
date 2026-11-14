@@ -5,6 +5,7 @@ Room photo + the store's real product swatch → 3 AI mockups. Prepaid credits p
 ## Parts
 - `supabase/migrations/` — every migration applied to the live project, in order (schema, RLS, plans/billing, marketplace, supplier requests).
 - `supabase/functions/` — Edge Functions: `generate` (image render, Google or fal), `billing-checkout`, `billing-portal`, `stripe-webhook`.
+  `autotag` fills colour, shade, vibe, look tags, rooms and surfaces for any product or catalogue row that has never been tagged. A pg_cron job calls it every 5 minutes, so bulk imports and new suppliers need nothing extra. Deploy it with JWT verification off (it checks the sweep token or a platform admin itself). Optional `app_settings.tag_model` picks the Google model.
 - `web/` — Vite + React app (Create, Proposal, Products, Suppliers, billing, team, admin).
 
 ## One-time setup

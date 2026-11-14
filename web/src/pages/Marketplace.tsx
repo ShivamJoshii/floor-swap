@@ -88,7 +88,7 @@ export default function Marketplace({ ctx }: { ctx: Ctx }) {
       } else throw new Error("This listing has no swatch yet.");
       const newId = crypto.randomUUID();
       const { error } = await supabase.from("products").insert({ id: newId, store_id: store.id, name: p.name, sku: p.sku, type: p.type, length_in: p.length_in, width_in: p.width_in, finish: p.finish, colour_family: p.colour_family, collection: p.collection,
-        supplier_id: p.supplier_id, supplier_product_id: p.id, swatch_path: path, surfaces: p.surfaces ?? ["floor"], rooms: p.rooms ?? [], tone: p.tone, hue: p.hue, tags: p.tags ?? [], created_by: ctx.session.user.id });
+        supplier_id: p.supplier_id, supplier_product_id: p.id, swatch_path: path, surfaces: p.surfaces ?? ["floor"], rooms: p.rooms ?? [], tone: p.tone, hue: p.hue, tags: p.tags ?? [], vibes: p.vibes ?? [], created_by: ctx.session.user.id });
       if (error) throw new Error(error.message);
       queueShowcase(store.id, [newId]);
       ctx.toast(`${p.name} added to your products.`);

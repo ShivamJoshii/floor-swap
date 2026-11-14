@@ -1,7 +1,10 @@
 // Dominant tone/hue of a swatch. Mirrors the Python classifier used for the bulk imports.
 export type Tone = "light" | "medium" | "dark";
-export type Hue = "white" | "grey" | "beige" | "warm" | "brown" | "black" | "blue" | "green" | "multi";
-export const HUES: Hue[] = ["white", "grey", "beige", "warm", "brown", "black", "blue", "green", "multi"];
+// "tan" was called "warm" before; "warm" is now only a vibe.
+export type Hue = "white" | "grey" | "beige" | "tan" | "brown" | "black" | "blue" | "green" | "multi";
+export const HUES: Hue[] = ["white", "grey", "beige", "tan", "brown", "black", "blue", "green", "multi"];
+/** How a product feels. Filled by the server-side autotag function; staff can change it. */
+export const VIBES = ["modern", "warm", "luxury", "minimal", "rustic", "classic", "bold", "natural"] as const;
 export const TONES: Tone[] = ["light", "medium", "dark"];
 export const SURFACES = ["floor", "wall", "backsplash", "shower"] as const;
 export const ROOMS = ["living room", "bedroom", "kitchen", "bathroom", "basement", "hallway", "entryway", "laundry", "office", "stairs"] as const;
@@ -32,7 +35,7 @@ export function classify(bmp: ImageBitmap | HTMLCanvasElement | HTMLImageElement
   const warmish = (hdeg >= 15 && hdeg <= 70) || hdeg > 330;
   let hue: Hue;
   if (s < 0.10 || (L >= 190 && s < 0.22 && !warmish)) hue = L >= 200 ? "white" : L < 60 ? "black" : "grey";
-  else if (warmish) hue = L >= 150 ? (s < 0.40 ? "beige" : "warm") : L >= 95 ? "warm" : "brown";
+  else if (warmish) hue = L >= 150 ? (s < 0.40 ? "beige" : "tan") : L >= 95 ? "tan" : "brown";
   else if (hdeg > 70 && hdeg <= 170 && s >= 0.18) hue = "green";
   else if (hdeg > 170 && hdeg <= 260 && s >= 0.18) hue = "blue";
   else if (s < 0.18) hue = "grey";
@@ -69,4 +72,11 @@ export function suggestTags(p: { name: string; type: string; collection?: string
     for (const sp of ["oak", "walnut", "hickory", "maple"]) if (n.includes(sp)) tags.add(sp);
   }
   return { surfaces: [...surfaces].sort(), rooms: [...rooms].sort(), tags: [...tags].sort() };
+}
+
+/** Size as people say it, short side first: 24x48, 7x48. Empty when a side is unknown. */
+export function sizeLabel(p: { length_in?: number | null; width_in?: number | null }): string {
+  if (!p.length_in || !p.width_in) return "";
+  const f = (n: number) => String(Math.round(n * 10) / 10).replace(/\.0$/, "");
+  return `${f(Math.min(p.length_in, p.width_in))}x${f(Math.max(p.length_in, p.width_in))}`;
 }

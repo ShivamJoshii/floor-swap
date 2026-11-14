@@ -265,7 +265,7 @@ details.more > summary::-webkit-details-marker { display: none; }
 .swatches .dot { all: unset; cursor: pointer; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--color-contrast-lower); box-sizing: border-box; }
 .swatches .dot.on { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 .dot[data-hue=white] { background: #f4f4f2; } .dot[data-hue=grey] { background: #9a9a9e; } .dot[data-hue=beige] { background: #d8c8ad; }
-.dot[data-hue=warm] { background: #b8895a; } .dot[data-hue=brown] { background: #5c3f2a; } .dot[data-hue=black] { background: #1b1b1d; }
+.dot[data-hue=tan] { background: #b8895a; } .dot[data-hue=brown] { background: #5c3f2a; } .dot[data-hue=black] { background: #1b1b1d; }
 .dot[data-hue=blue] { background: #5b7ea6; } .dot[data-hue=green] { background: #6f8a62; }
 .sku .nm { font-weight: var(--w-normal); }
 .card h2 { font-size: var(--ts-2xs); }

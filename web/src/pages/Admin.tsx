@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { supabase, money, type Pack } from "../lib/supabase";
 import type { Ctx } from "../App";
 
-type StoreRow = { id: string; name: string; city: string | null; created_at: string; balance: number; members: number; renders: number; last_render: string | null; plan_id?: string | null; plan_status?: string | null };
+type StoreRow = { id: string; name: string; city: string | null; created_at: string; balance: number; members: number; renders: number; last_render: string | null; plan_id?: string | null; plan_status?: string | null; images_30d?: number; cost_cents_30d?: number; images_total?: number; cost_cents_total?: number };
+type UsageRow = { store_id: string; images_30d: number; cost_cents_30d: number; images_total: number; cost_cents_total: number };
+const usd = (cents?: number) => `US$${((cents ?? 0) / 100).toFixed(2)}`;
 type Plan = { id: string; name: string; monthly_cents: number };
 
 export default function Admin({ ctx }: { ctx: Ctx }) {
@@ -34,9 +36,10 @@ export default function Admin({ ctx }: { ctx: Ctx }) {
   const load = useCallback(async () => {
     const { data: rq } = await supabase.from("supplier_requests").select("*, store:stores(name)").order("created_at", { ascending: false }).limit(100);
     setReqs((rq ?? []) as typeof reqs);
-    const [{ data: s }, { data: p }, { data: pl }, { data: st }] = await Promise.all([supabase.rpc("admin_stores"), supabase.from("credit_packs").select("*").order("sort"), supabase.from("plans").select("id, name, monthly_cents").order("sort"), supabase.from("stores").select("id, plan_id, plan_status")]);
+    const [{ data: s }, { data: p }, { data: pl }, { data: st }, { data: us }] = await Promise.all([supabase.rpc("admin_stores"), supabase.from("credit_packs").select("*").order("sort"), supabase.from("plans").select("id, name, monthly_cents").order("sort"), supabase.from("stores").select("id, plan_id, plan_status"), supabase.rpc("admin_usage")]);
+    const useMap = new Map(((us ?? []) as UsageRow[]).map((x) => [x.store_id, x]));
     const planMap = new Map(((st ?? []) as { id: string; plan_id: string | null; plan_status: string | null }[]).map((x) => [x.id, x]));
-    setStores(((s ?? []) as StoreRow[]).map((r) => ({ ...r, plan_id: planMap.get(r.id)?.plan_id ?? null, plan_status: planMap.get(r.id)?.plan_status ?? null }))); setPacks((p ?? []) as Pack[]); setPlans((pl ?? []) as Plan[]);
+    setStores(((s ?? []) as StoreRow[]).map((r) => ({ ...r, plan_id: planMap.get(r.id)?.plan_id ?? null, plan_status: planMap.get(r.id)?.plan_status ?? null, ...(useMap.get(r.id) ?? {}) }))); setPacks((p ?? []) as Pack[]); setPlans((pl ?? []) as Plan[]);
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -65,7 +68,7 @@ export default function Admin({ ctx }: { ctx: Ctx }) {
         <label className="f">Owner email (they sign up with this)<input type="email" value={ns.email} onChange={(e) => setNs({ ...ns, email: e.target.value })} placeholder="owner@store.com" /></label>
         <div className="grid2">
           <label className="f">Plan<select value={ns.plan} onChange={(e) => setNs({ ...ns, plan: e.target.value })}><option value="">Free trial (14 days, watermarked)</option>{plans.map((p) => <option key={p.id} value={p.id}>{p.name} · {money(p.monthly_cents)}/mo (set manually, bill outside Stripe)</option>)}</select></label>
-          <label className="f">Starter renders<input type="number" min="0" value={ns.credits} onChange={(e) => setNs({ ...ns, credits: e.target.value })} /></label>
+          <label className="f">Starter images<input type="number" min="0" value={ns.credits} onChange={(e) => setNs({ ...ns, credits: e.target.value })} /></label>
         </div>
         <button className="primary" disabled={nsBusy}>{nsBusy ? <span className="spinner" /> : "Create store"}</button>
         {nsMsg && <p className="small">{nsMsg}</p>}
@@ -108,7 +111,7 @@ export default function Admin({ ctx }: { ctx: Ctx }) {
       <div className="card">
         <h2>Stores</h2>
         <div className="table-wrap"><table>
-          <thead><tr><th>Store</th><th>Plan</th><th className="num">Top-ups</th><th className="num">Members</th><th className="num">Renders</th><th>Last render</th><th>Since</th></tr></thead>
+          <thead><tr><th>Store</th><th>Plan</th><th className="num">Top-ups</th><th className="num">Members</th><th className="num">Images 30d</th><th className="num">Cost 30d</th><th className="num">Images all</th><th className="num">Cost all</th><th>Last render</th><th>Since</th></tr></thead>
           <tbody>
             {stores.map((s) => (
               <tr key={s.id}>
@@ -116,7 +119,10 @@ export default function Admin({ ctx }: { ctx: Ctx }) {
                 <td><span className={"status " + (s.plan_status === "active" ? "done" : s.plan_status === "past_due" || s.plan_status === "canceled" ? "failed" : "")}>{s.plan_status === "active" ? (plans.find((p) => p.id === s.plan_id)?.name ?? s.plan_id) : s.plan_status ?? "trial"}</span></td>
                 <td className="num">{s.balance}</td>
                 <td className="num">{s.members}</td>
-                <td className="num">{s.renders}</td>
+                <td className="num">{s.images_30d ?? 0}</td>
+                <td className="num">{usd(s.cost_cents_30d)}</td>
+                <td className="num">{s.images_total ?? 0}</td>
+                <td className="num">{usd(s.cost_cents_total)}</td>
                 <td className="muted">{s.last_render ? new Date(s.last_render).toLocaleDateString("en-CA") : "—"}</td>
                 <td className="muted">{new Date(s.created_at).toLocaleDateString("en-CA")}</td>
               </tr>

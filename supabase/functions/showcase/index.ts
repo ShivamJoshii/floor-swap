@@ -1,9 +1,8 @@
 // Floor Swap — showcase: one styled room photo per product, made from its swatch alone.
 // Used on builder sheets (builders have no room photo of their own). Made once per product, then reused.
-// POST { store_id, product_ids?: string[], missing?: boolean, limit?: number }
-//   product_ids: make these (skips ones already done unless force)
-//   missing: pick up to `limit` products in the store that have no showcase yet
-// Returns { done: [{id, path}], failed: [{id, error}], remaining }
+// Each one uses one image from the store's plan, so only products a person picked are made (never a whole-store sweep).
+// POST { store_id, product_ids: string[], confirm: true, limit?: number, force?: boolean }
+// Returns { done: [{id, path}], failed: [{id, error}], remaining, out_of_images }
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -111,8 +110,11 @@ Deno.serve(async (req: Request) => {
   const { data: { user } } = await userClient.auth.getUser();
   if (!user) return json({ error: "Not signed in." }, 401);
 
-  const body = await req.json().catch(() => null) as { store_id?: string; product_ids?: string[]; missing?: boolean; limit?: number; force?: boolean } | null;
+  const body = await req.json().catch(() => null) as { store_id?: string; product_ids?: string[]; limit?: number; force?: boolean; confirm?: boolean } | null;
   if (!body?.store_id) return json({ error: "store_id is required." }, 400);
+  // Each room photo uses one image from the store's plan, so only the products someone picked are made.
+  if (!body.product_ids?.length) return json({ error: "Pick the products to make room photos for." }, 400);
+  if (body.confirm !== true) return json({ error: "Refresh the app to make room photos." }, 400);
   const svc = createClient(SUPABASE_URL, SERVICE_KEY);
   const { data: member } = await svc.from("store_members").select("role").eq("store_id", body.store_id).eq("user_id", user.id).maybeSingle();
   if (!member) return json({ error: "You are not a member of this store." }, 403);
@@ -122,11 +124,9 @@ Deno.serve(async (req: Request) => {
   // Anything stuck in "running" for 10+ minutes is treated as failed and retried.
   const stale = new Date(Date.now() - 10 * 60_000).toISOString();
   let q = svc.from("products").select(cols).eq("store_id", body.store_id).eq("active", true);
-  if (body.product_ids?.length) q = q.in("id", body.product_ids.slice(0, 50));
-  // Explicit ids retry earlier failures; the "all missing" sweep skips them so it can't loop on a bad swatch.
-  if (!body.force) q = q.is("showcase_path", null).or(body.product_ids?.length
-    ? `showcase_status.is.null,showcase_status.eq.failed,showcase_updated_at.lt.${stale}`
-    : `showcase_status.is.null,showcase_updated_at.lt.${stale}`);
+  q = q.in("id", body.product_ids.slice(0, 50));
+  // Picked products retry earlier failures; ones still running are left alone.
+  if (!body.force) q = q.is("showcase_path", null).or(`showcase_status.is.null,showcase_status.eq.failed,showcase_updated_at.lt.${stale}`);
   const { data: picked, error: perr } = await q.order("created_at").limit(limit);
   if (perr) return json({ error: perr.message }, 500);
   const todo = (picked ?? []) as P[];
@@ -137,7 +137,24 @@ Deno.serve(async (req: Request) => {
   const primary = wantGoogle ? String(settings.google_model ?? "gemini-nano-banana-2.1") : String(settings.model ?? "fal-ai/nano-banana-2/edit");
   const fallback = FAL_KEY ? String(settings.fallback_model ?? settings.model ?? "fal-ai/nano-banana-2/edit") : null;
 
-  if (todo.length) await svc.from("products").update({ showcase_status: "running", showcase_error: null, showcase_updated_at: new Date().toISOString() }).in("id", todo.map((p) => p.id));
+  const modelCosts = (settings.model_costs ?? {}) as Record<string, number>;
+  const flatCost = Number(settings.provider_cost_cents_per_image ?? 0);
+
+  // Charge one image per product before generating. Stop at the first one the store can't cover.
+  const usage = new Map<string, string>();
+  let outOfImages = false;
+  for (const p of todo) {
+    const { data: usageId, error } = await svc.rpc("consume_images", {
+      p_store: body.store_id, p_images: 1, p_kind: "showcase", p_user: user.id, p_product: p.id, p_product_name: p.name, p_model: primary,
+    });
+    if (error || !usageId) {
+      if (/insufficient/i.test(error?.message ?? "")) { outOfImages = true; break; }
+      return json({ error: error?.message ?? "Could not record usage." }, 500);
+    }
+    usage.set(p.id, usageId as string);
+  }
+  const paid = todo.filter((p) => usage.has(p.id));
+  if (paid.length) await svc.from("products").update({ showcase_status: "running", showcase_error: null, showcase_updated_at: new Date().toISOString() }).in("id", paid.map((p) => p.id));
 
   const one = async (p: P): Promise<{ id: string; path?: string; error?: string }> => {
     try {
@@ -145,10 +162,11 @@ Deno.serve(async (req: Request) => {
       if (signed.error || !signed.data) throw new Error("Swatch not found.");
       const prompt = buildPrompt(p);
       let r: { ok: true; image: Img } | { ok: false; error: string };
+      let used = primary;
       if (wantGoogle) {
         const s = await fetch(signed.data.signedUrl);
         r = await googleGen(primary, prompt, { bytes: new Uint8Array(await s.arrayBuffer()), mime: (s.headers.get("content-type") ?? "image/jpeg").split(";")[0] });
-        if (!r.ok && fallback) { console.warn("google failed", r.error); r = await falGen(fallback, prompt, signed.data.signedUrl); }
+        if (!r.ok && fallback) { console.warn("google failed", r.error); used = fallback; r = await falGen(fallback, prompt, signed.data.signedUrl); }
       } else r = await falGen(primary, prompt, signed.data.signedUrl);
       if (!r.ok) throw new Error(r.error);
       const ext = r.image.mime.includes("png") ? "png" : r.image.mime.includes("webp") ? "webp" : "jpg";
@@ -156,22 +174,24 @@ Deno.serve(async (req: Request) => {
       const up = await svc.storage.from("renders").upload(path, r.image.bytes, { contentType: r.image.mime, upsert: true });
       if (up.error) throw new Error(up.error.message);
       await svc.from("products").update({ showcase_path: path, showcase_status: "done", showcase_error: null, showcase_updated_at: new Date().toISOString() }).eq("id", p.id);
+      await svc.rpc("settle_images", { p_usage: usage.get(p.id), p_delivered: 1, p_cost: Number(modelCosts[used] ?? flatCost), p_model: used });
       return { id: p.id, path };
     } catch (e) {
       const msg = (e instanceof Error ? e.message : String(e)).slice(0, 500);
       await svc.from("products").update({ showcase_status: "failed", showcase_error: msg, showcase_updated_at: new Date().toISOString() }).eq("id", p.id);
+      await svc.rpc("settle_images", { p_usage: usage.get(p.id), p_delivered: 0 });
       return { id: p.id, error: msg };
     }
   };
-  const results = await Promise.all(todo.map(one));
+  const results = await Promise.all(paid.map(one));
 
   let rq = svc.from("products").select("id", { count: "exact", head: true }).eq("store_id", body.store_id).eq("active", true).is("showcase_path", null);
-  if (body.product_ids?.length) rq = rq.in("id", body.product_ids.slice(0, 50));
-  else rq = rq.or("showcase_status.is.null,showcase_status.neq.failed");
+  rq = rq.in("id", body.product_ids.slice(0, 50));
   const { count } = await rq;
   return json({
     done: results.filter((r) => r.path).map((r) => ({ id: r.id, path: r.path })),
     failed: results.filter((r) => r.error).map((r) => ({ id: r.id, error: r.error })),
     remaining: count ?? 0,
+    out_of_images: outOfImages,
   });
 });

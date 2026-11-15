@@ -1,4 +1,3 @@
-import { queueShowcase } from "../lib/showcase";
 import { useCallback, useEffect, useState } from "react";
 import { useRef } from "react";
 import { supabase, signedUrl, type Product, type Supplier, type SupplierProduct } from "../lib/supabase";
@@ -176,7 +175,6 @@ export default function Products({ ctx }: { ctx: Ctx }) {
       };
       const { error } = await supabase.from("products").insert(row);
       if (error) throw new Error(error.message);
-      queueShowcase(store, [id]);
       if (form.share && row.supplier_id && row.sku) await shareToCatalog({ ...row, active: true, created_at: "" } as Product, blob);
       ctx.toast(`${form.name} added.`);
       setForm(empty); setBmp(null); setQuad(null); setQuality(null); setAdding(false);
@@ -234,7 +232,6 @@ export default function Products({ ctx }: { ctx: Ctx }) {
           }
         }
       }
-      queueShowcase(store, newIds);
       setImportMsg(`Imported ${done}${shared ? `, ${shared} shared to supplier catalog` : ""}${skipped ? `, skipped ${skipped} already there` : ""}${errors.length ? `, ${errors.length} failed: ${errors[0]}` : ""}.`);
       ctx.toast(`Imported ${done} products.`); load();
     } catch (e) { setImportMsg(e instanceof Error ? e.message : String(e)); }

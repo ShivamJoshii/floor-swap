@@ -223,7 +223,7 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
                 )}
               </div>
             )}
-            <div className="row"><span className="small muted">Versions</span><div className="seg">{[1, 2, 3].map((n) => <button key={n} type="button" className={nOpts === n ? "on" : ""} onClick={() => setNOpts(n)}>{n}</button>)}</div></div>
+            <div className="row"><span className="small muted">Versions</span><div className="seg">{[1, 2, 3].map((n) => <button key={n} type="button" className={nOpts === n ? "on" : ""} onClick={() => setNOpts(n)}>{n}</button>)}</div><span className="small muted">uses {nOpts} image{nOpts === 1 ? "" : "s"}</span></div>
             <div className="grid2">
               <label className="f">Customer name<input type="text" value={lead.name} onChange={(e) => setLead({ ...lead, name: e.target.value })} /></label>
               <label className="f">Customer phone<input type="tel" value={lead.phone} onChange={(e) => setLead({ ...lead, phone: e.target.value })} /></label>
@@ -232,10 +232,10 @@ export default function Generate({ ctx }: { ctx: Ctx }) {
         </details>
 
         <button className="primary big" disabled={!ready || !!busy || noCredits} onClick={generate}>
-          {busy ? <><span className="spinner" /> {busy}</> : noCredits ? "No renders left" : !file ? "Add a room photo" : !product ? "Pick a product" : `Show it on the ${surfaceLabel}`}
+          {busy ? <><span className="spinner" /> {busy}</> : noCredits ? "No images left" : !file ? "Add a room photo" : !product ? "Pick a product" : `Show it on the ${surfaceLabel}`}
         </button>
         {err && <p className="warn small">{err}</p>}
-        {noCredits && <p className="small muted">Out of renders. <button className="sm ghost" style={{ padding: "0 4px" }} onClick={() => ctx.goTo("credits")}>See plans</button></p>}
+        {noCredits && <p className="small muted">Out of images. <button className="sm ghost" style={{ padding: "0 4px" }} onClick={() => ctx.goTo("credits")}>See plans</button></p>}
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>

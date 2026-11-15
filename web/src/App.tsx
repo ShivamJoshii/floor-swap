@@ -116,7 +116,7 @@ export default function App() {
         <span className="brand" onClick={() => setTab("generate")} style={{ cursor: "pointer" }}>Floor Swap</span>
         <nav>{tabs.map(([t, l]) => <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>{l}</button>)}</nav>
         <div className="right">
-          <button className={"credits-pill" + (pill.low ? " low" : "")} title="Renders" onClick={() => setTab("credits")}>{pill.text}</button>
+          <button className={"credits-pill" + (pill.low ? " low" : "")} title="Images left" onClick={() => setTab("credits")}>{pill.text}</button>
           <details className="menu">
             <summary>{membership.stores.name}</summary>
             <div className="menu-pop" onClick={(e) => { const d = e.currentTarget.parentElement as HTMLDetailsElement; if ((e.target as HTMLElement).tagName === "BUTTON") d.open = false; }}>

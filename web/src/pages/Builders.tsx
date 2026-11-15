@@ -25,6 +25,7 @@ export default function Builders({ ctx }: { ctx: Ctx }) {
   const [done, setDone] = useState<{ link: string; blob: Blob; name: string; phone: string } | null>(null);
   const [sheets, setSheets] = useState<Sheet[]>([]);
   const [sweep, setSweep] = useState<string | null>(null);
+  const [making, setMaking] = useState(false);
 
   const load = useCallback(async () => {
     const [{ data }, { data: sup }, { data: sh }] = await Promise.all([
@@ -56,22 +57,25 @@ export default function Builders({ ctx }: { ctx: Ctx }) {
   const failedRoom = list.filter((p) => !p.showcase_path && p.showcase_status === "failed").length;
   const toggle = (id: string) => setPicked((cur) => cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]);
 
-  async function makeAll() {
-    setSweep("Starting…");
-    const r = await makeShowcases(store.id, undefined, (made, left) => setSweep(`Made ${made} · ${left} to go`));
-    setSweep(`Made ${r.made} room photo${r.made === 1 ? "" : "s"}${r.failed.length ? ` · ${r.failed.length} failed (bad or missing swatch — retake it)` : ""}.`);
-    load();
+  // Room photos are made only for picked products, on request: each one uses an image from the plan.
+  const needPhoto = picked.filter((id) => { const p = list.find((x) => x.id === id); return p && !p.showcase_path; });
+  async function makePicked() {
+    if (!needPhoto.length || making) return;
+    setMaking(true); setSweep(`Making room photos 0 of ${needPhoto.length}…`);
+    const total = needPhoto.length;
+    const r = await makeShowcases(store.id, needPhoto, (made) => setSweep(`Making room photos ${made} of ${total}…`));
+    const bad = r.failed.filter((f) => f.id).length, problem = r.failed.find((f) => !f.id)?.error;
+    setSweep(`Made ${r.made} room photo${r.made === 1 ? "" : "s"}.`
+      + (bad ? ` ${bad} failed (usually a poor swatch) and weren't counted.` : "")
+      + (r.outOfImages ? " Out of images: top up or change plan to make the rest." : "")
+      + (problem ? ` ${problem}` : ""));
+    setMaking(false); load(); ctx.refreshBalance();
   }
 
   async function create() {
     if (!picked.length) { setErr("Pick at least one product."); return; }
     setErr(null); setDone(null);
     try {
-      const missing = picked.filter((id) => !list.find((p) => p.id === id)?.showcase_path);
-      if (missing.length) {
-        setBusy(`Making room photos 0 of ${missing.length}…`);
-        await makeShowcases(store.id, missing, (made) => setBusy(`Making room photos ${made} of ${missing.length}…`));
-      }
       setBusy("Fetching images…");
       const { data: fresh } = await supabase.from("products").select("*").in("id", picked);
       const byId = new Map(((fresh ?? []) as Product[]).map((p) => [p.id, p]));
@@ -118,7 +122,7 @@ export default function Builders({ ctx }: { ctx: Ctx }) {
     <div className="two">
       <div className="card">
         <h2>Send to a builder</h2>
-        <p className="small muted">For builders and contractors with no room to photograph: each product goes out with a styled room photo and its specs, as a link and a PDF.</p>
+        <p className="small muted">For builders and contractors with no room to photograph: each product goes out with its specs and a styled room photo (or its swatch), as a link and a PDF.</p>
         <div className="grid2">
           <label className="f">Name<input type="text" value={b.name} onChange={(e) => setB({ ...b, name: e.target.value })} /></label>
           <label className="f">Company<input type="text" value={b.company} onChange={(e) => setB({ ...b, company: e.target.value })} /></label>
@@ -133,7 +137,14 @@ export default function Builders({ ctx }: { ctx: Ctx }) {
             {picked.map((id) => { const p = list.find((x) => x.id === id); return p ? <button key={id} className="sm" onClick={() => toggle(id)} title="Remove">{p.name} ×</button> : null; })}
           </div>
         )}
-        <button className="primary big" disabled={!picked.length || !!busy} onClick={create}>{busy ? <><span className="spinner" /> {busy}</> : "Create sheet"}</button>
+        {needPhoto.length > 0 && (
+          <div className="row small">
+            <span className="grow muted">{needPhoto.length} picked product{needPhoto.length === 1 ? " has" : "s have"} no room photo yet. The sheet shows the swatch instead.</span>
+            <button className="sm" disabled={making || !!busy} onClick={makePicked}>{making ? <span className="spinner" /> : `Make ${needPhoto.length} room photo${needPhoto.length === 1 ? "" : "s"} · uses ${needPhoto.length} image${needPhoto.length === 1 ? "" : "s"}`}</button>
+          </div>
+        )}
+        {sweep && <p className="small muted">{sweep}</p>}
+        <button className="primary big" disabled={!picked.length || !!busy || making} onClick={create}>{busy ? <><span className="spinner" /> {busy}</> : "Create sheet"}</button>
         {err && <p className="warn small">{err}</p>}
         {done && (
           <div className="card">
@@ -175,10 +186,9 @@ export default function Builders({ ctx }: { ctx: Ctx }) {
         <div className="row">
           <h2 className="grow">Pick products</h2>
           <span className="small muted">Room photos: {withRoom} of {list.length}</span>
-          {withRoom < list.length && <button className="sm" disabled={!!sweep && !/^Made \d+ room/.test(sweep)} onClick={makeAll}>Make the rest</button>}
         </div>
-        {sweep && <p className="small muted">{sweep}</p>}
-        {failedRoom > 0 && <p className="small muted">{failedRoom} product{failedRoom === 1 ? "" : "s"} couldn't get a room photo (usually a poor swatch). They're retried when you pick them.</p>}
+        <p className="small muted">Pick products, then make room photos for the ones you want. Each room photo uses one image from your plan and is kept for next time.</p>
+        {failedRoom > 0 && <p className="small muted">{failedRoom} product{failedRoom === 1 ? "" : "s"} couldn't get a room photo (usually a poor swatch). Pick them to try again.</p>}
         <ProductFilter list={list} suppliers={suppliers} value={filters} onChange={setFilters} />
         <div className="catalog" style={{ maxHeight: 620 }}>
           {shown.map((p) => (

@@ -1,5 +1,5 @@
 // Floor Swap — generate: room photo + product swatch -> N rendered options via fal.
-// Charges prepaid credits atomically; refunds if every attempt fails.
+// Charges one image per option (monthly allowance first, then top-ups); images that fail are given back.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -153,29 +153,37 @@ Deno.serve(async (req: Request) => {
   const modelCosts = (settings.model_costs ?? {}) as Record<string, number>;
   const maxImages = Math.min(4, Math.max(1, Number(settings.images_per_generation ?? 3)));
   const numImages = Math.min(maxImages, Math.max(1, Math.round(Number(body.num_images ?? settings.default_images ?? maxImages)) || maxImages));
-  const credits = Math.max(1, Number(settings.credits_per_generation ?? 1));
   const costPerImage = Number(settings.provider_cost_cents_per_image ?? 0);
   const options: Options = body.options ?? {};
   const prompt = buildPrompt(product, options);
 
   const { data: render, error: rerr } = await svc.from("renders").insert({
     store_id: body.store_id, product_id: product.id, user_id: user.id, room_path: body.room_path,
-    status: "running", model, prompt, options, credits_charged: credits,
+    status: "running", model, prompt, options, credits_charged: numImages,
     lead_name: body.lead_name ?? null, lead_phone: body.lead_phone ?? null,
   }).select("id").single();
   if (rerr || !render) return json({ error: "Could not create render: " + (rerr?.message ?? "") }, 500);
 
-  const { error: cerr } = await svc.rpc("consume_credits", { p_store: body.store_id, p_amount: credits, p_render: render.id });
-  if (cerr) {
-    await svc.from("renders").update({ status: "failed", error: cerr.message, credits_charged: 0, finished_at: new Date().toISOString() }).eq("id", render.id);
-    const low = /insufficient/i.test(cerr.message);
-    return json({ error: low ? "No credits left. Top up to keep generating." : cerr.message, render_id: render.id }, low ? 402 : 500);
+  // Charge per image up front (allowance first, then top-ups); anything not delivered is given back.
+  const { data: usageId, error: cerr } = await svc.rpc("consume_images", {
+    p_store: body.store_id, p_images: numImages, p_kind: "render", p_user: user.id, p_render: render.id,
+    p_product: product.id, p_product_name: product.name, p_model: model,
+  });
+  if (cerr || !usageId) {
+    const msg = cerr?.message ?? "Could not record usage.";
+    await svc.from("renders").update({ status: "failed", error: msg, credits_charged: 0, finished_at: new Date().toISOString() }).eq("id", render.id);
+    const left = Number(/\((\d+) left\)/.exec(msg)?.[1] ?? NaN);
+    const low = /insufficient/i.test(msg);
+    const text = !low ? msg : left > 0
+      ? `Only ${left} image${left === 1 ? "" : "s"} left. Pick fewer options or top up.`
+      : "No images left. Top up or change plan to keep generating.";
+    return json({ error: text, render_id: render.id, images_left: Number.isFinite(left) ? left : null }, low ? 402 : 500);
   }
 
   const fail = async (msg: string, status = 502) => {
     console.error("render failed", render.id, msg);
-    await svc.from("credit_ledger").insert({ store_id: body.store_id, delta: credits, reason: "refund", render_id: render.id, note: msg.slice(0, 200) });
-    await svc.from("renders").update({ status: "failed", error: msg.slice(0, 2000), finished_at: new Date().toISOString() }).eq("id", render.id);
+    await svc.rpc("settle_images", { p_usage: usageId, p_delivered: 0 });
+    await svc.from("renders").update({ status: "failed", error: msg.slice(0, 2000), credits_charged: 0, finished_at: new Date().toISOString() }).eq("id", render.id);
     return json({ error: msg, render_id: render.id, refunded: true }, status);
   };
 
@@ -233,8 +241,9 @@ Deno.serve(async (req: Request) => {
     }
     if (!outputs.length) return await fail("Could not store the generated images.");
 
+    await svc.rpc("settle_images", { p_usage: usageId, p_delivered: outputs.length, p_cost: cost, p_model: outputs[0].model ?? model });
     await svc.from("renders").update({
-      status: "done", outputs, provider_cost_cents: cost, finished_at: new Date().toISOString(),
+      status: "done", outputs, provider_cost_cents: cost, credits_charged: outputs.length, finished_at: new Date().toISOString(),
       error: errors.length ? `${errors.length} of ${numImages} attempts failed: ${errors[0].slice(0, 300)}` : null,
     }).eq("id", render.id);
 

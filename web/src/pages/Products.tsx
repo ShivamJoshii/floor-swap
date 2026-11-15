@@ -1,9 +1,8 @@
-import { queueShowcase } from "../lib/showcase";
 import { useCallback, useEffect, useState } from "react";
 import { useRef } from "react";
 import { supabase, signedUrl, type Product, type Supplier, type SupplierProduct } from "../lib/supabase";
 import { loadBitmap, analyze, rectify, whiteBalance, canvasToJpeg, type Quad, type Quality } from "../lib/image";
-import { classify, suggestTags, HUES, TONES, SURFACES, ROOMS } from "../lib/colour";
+import { classify, suggestTags, HUES, TONES, SURFACES, ROOMS, VIBES } from "../lib/colour";
 import ProductFilter, { applyFilters, emptyFilters, type Filters } from "../components/ProductFilter";
 import type { Ctx } from "../App";
 
@@ -35,7 +34,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
   const [editMsg, setEditMsg] = useState<string | null>(null);
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [tagMsg, setTagMsg] = useState<string | null>(null);
-  const [editTags, setEditTags] = useState({ tone: "", hue: "", surfaces: [] as string[], rooms: [] as string[], tags: "" });
+  const [editTags, setEditTags] = useState({ tone: "", hue: "", surfaces: [] as string[], rooms: [] as string[], tags: "", vibes: [] as string[] });
 
   const load = useCallback(async () => {
     const [{ data }, { data: sup }] = await Promise.all([
@@ -120,7 +119,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
   function startEdit(p: Product) {
     setEditing(p); setEditMsg(null);
     setEditForm({ name: p.name, sku: p.sku ?? "", type: p.type, length: p.length_in ? String(p.length_in) : "", width: p.width_in ? String(p.width_in) : "", finish: p.finish ?? "", price: p.price_per_sqft ? String(p.price_per_sqft) : "", notes: p.notes ?? "", supplier_id: p.supplier_id ?? "" });
-    setEditTags({ tone: p.tone ?? "", hue: p.hue ?? "", surfaces: p.surfaces ?? ["floor"], rooms: p.rooms ?? [], tags: (p.tags ?? []).join(", ") });
+    setEditTags({ tone: p.tone ?? "", hue: p.hue ?? "", surfaces: p.surfaces ?? ["floor"], rooms: p.rooms ?? [], tags: (p.tags ?? []).join(", "), vibes: p.vibes ?? [] });
   }
   async function saveEdit(e: React.FormEvent) {
     e.preventDefault(); if (!editing) return;
@@ -129,7 +128,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
       name: editForm.name.trim(), sku: editForm.sku.trim() || null, type: editForm.type, length_in: len, width_in: wid, finish: editForm.finish.trim() || null,
       price_per_sqft: editForm.price ? parseFloat(editForm.price) : null, notes: editForm.notes.trim() || null, supplier_id: editForm.supplier_id || null,
       tone: editTags.tone || null, hue: editTags.hue || null, colour_family: editTags.tone && editTags.hue ? `${editTags.tone} ${editTags.hue}` : editing.colour_family ?? null,
-      surfaces: editTags.surfaces.length ? editTags.surfaces : ["floor"], rooms: editTags.rooms, tags: editTags.tags.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
+      surfaces: editTags.surfaces.length ? editTags.surfaces : ["floor"], rooms: editTags.rooms, tags: editTags.tags.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean), vibes: editTags.vibes,
     }).eq("id", editing.id);
     if (error) { setEditMsg(error.message); return; }
     ctx.toast("Saved."); setEditing(null); load();
@@ -176,7 +175,6 @@ export default function Products({ ctx }: { ctx: Ctx }) {
       };
       const { error } = await supabase.from("products").insert(row);
       if (error) throw new Error(error.message);
-      queueShowcase(store, [id]);
       if (form.share && row.supplier_id && row.sku) await shareToCatalog({ ...row, active: true, created_at: "" } as Product, blob);
       ctx.toast(`${form.name} added.`);
       setForm(empty); setBmp(null); setQuad(null); setQuality(null); setAdding(false);
@@ -190,7 +188,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
     if (!f) return;
     setImportMsg("Reading file…");
     try {
-      type Item = { name: string; type?: string; sku?: string | null; notes?: string | null; length_in?: number | null; width_in?: number | null; finish?: string | null; collection?: string | null; colour_family?: string | null; supplier?: string | null; jpg_b64: string; tone?: string | null; hue?: string | null; surfaces?: string[]; rooms?: string[]; tags?: string[] };
+      type Item = { name: string; type?: string; sku?: string | null; notes?: string | null; length_in?: number | null; width_in?: number | null; finish?: string | null; collection?: string | null; colour_family?: string | null; supplier?: string | null; jpg_b64: string; vibes?: string[]; tone?: string | null; hue?: string | null; surfaces?: string[]; rooms?: string[]; tags?: string[] };
       const items = JSON.parse(await f.text()) as Item[];
       if (!Array.isArray(items)) throw new Error("Not a catalog file.");
       // Resolve / create suppliers named in the file (shared by default).
@@ -218,7 +216,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
         const type = (["plank", "tile", "carpet", "other"].includes(it.type ?? "") ? it.type : "tile") as Product["type"];
         const row = { id, store_id: store, name: it.name, type, sku: it.sku ?? null, notes: it.notes ?? null, length_in: it.length_in ?? null, width_in: it.width_in ?? null,
           finish: it.finish ?? null, collection: it.collection ?? null, colour_family: it.colour_family ?? null, supplier_id: supplierId, swatch_path: path, created_by: ctx.session.user.id,
-          tone: it.tone ?? null, hue: it.hue ?? null, surfaces: it.surfaces?.length ? it.surfaces : ["floor"], rooms: it.rooms ?? [], tags: it.tags ?? [] };
+          tone: it.tone ?? null, hue: it.hue === "warm" ? "tan" : it.hue ?? null, surfaces: it.surfaces?.length ? it.surfaces : ["floor"], rooms: it.rooms ?? [], tags: it.tags ?? [], vibes: it.vibes ?? [] };
         const { error } = await supabase.from("products").insert(row);
         if (error) { errors.push(`${it.name}: ${error.message}`); continue; }
         done++; newIds.push(id); if (dupKey) existingSkus.add(dupKey); existingNames.add(it.name.toLowerCase());
@@ -234,7 +232,6 @@ export default function Products({ ctx }: { ctx: Ctx }) {
           }
         }
       }
-      queueShowcase(store, newIds);
       setImportMsg(`Imported ${done}${shared ? `, ${shared} shared to supplier catalog` : ""}${skipped ? `, skipped ${skipped} already there` : ""}${errors.length ? `, ${errors.length} failed: ${errors[0]}` : ""}.`);
       ctx.toast(`Imported ${done} products.`); load();
     } catch (e) { setImportMsg(e instanceof Error ? e.message : String(e)); }
@@ -430,6 +427,9 @@ export default function Products({ ctx }: { ctx: Ctx }) {
             </div>
             <div className="row" style={{ gap: 4 }}><span className="small muted" style={{ width: 54 }}>Rooms</span>
               {ROOMS.map((x) => <button type="button" key={x} className={"sm" + (editTags.rooms.includes(x) ? " on" : "")} style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => setEditTags({ ...editTags, rooms: toggleIn(editTags.rooms, x) })}>{x}</button>)}
+            </div>
+            <div className="row" style={{ gap: 4 }}><span className="small muted" style={{ width: 54 }}>Vibe</span>
+              {VIBES.map((x) => <button type="button" key={x} className={"sm" + (editTags.vibes.includes(x) ? " on" : "")} style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => setEditTags({ ...editTags, vibes: toggleIn(editTags.vibes, x) })}>{x}</button>)}
             </div>
             <label className="f">Other tags<input type="text" value={editTags.tags} onChange={(e) => setEditTags({ ...editTags, tags: e.target.value })} /></label>
             <div className="row">

@@ -13,7 +13,7 @@ const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const CALLBACK_PORT = 1455;
 const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}/auth/callback`;
 const AUTH_CLAIM = "https://api.openai.com/auth";
-const REFRESH_EARLY_MS = 5 * 60_000; // refresh when less than 5 minutes are left
+const REFRESH_EARLY_MS = 24 * 60 * 60_000; // refresh once less than a day is left, so a short outage never lets it lapse
 
 export const AUTH_DIR = process.env.FLOOR_SWAP_WORKER_DIR || join(homedir(), ".floor-swap-worker");
 export const AUTH_FILE = join(AUTH_DIR, "auth.json");
@@ -91,7 +91,12 @@ export async function refreshNow() {
 export async function getAuth() {
   const cred = await load();
   if (cred.expires - Date.now() > REFRESH_EARLY_MS) return cred;
-  return refreshNow();
+  try { return await refreshNow(); }
+  catch (e) {
+    // Network trouble while the current token still works: keep using it and retry the refresh next time.
+    if (!(e instanceof LoginRequired) && cred.expires - Date.now() > 60_000) return cred;
+    throw e;
+  }
 }
 
 export async function status() {

@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { getAuth, refreshNow, LoginRequired } from "./auth.mjs";
 
-const IMAGES_URL = "https://chatgpt.com/backend-api/codex/images";
+const IMAGES_URL = process.env.FLOOR_SWAP_CODEX_URL || "https://chatgpt.com/backend-api/codex/images"; // override is for tests only
 const DEADLINE_MS = 5 * 60_000;
 
 /**

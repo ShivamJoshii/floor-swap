@@ -74,22 +74,32 @@ async function withTimeout<T>(ms: number, fn: (signal: AbortSignal) => Promise<T
   try { return await fn(ctrl.signal); } finally { clearTimeout(t); }
 }
 
-/** Ask Google. Tries each model id until one exists; remembers the one that worked for the rest of this request. */
+/** Ask Google. Tries each model id until one answers; a missing, busy or slow model moves on to the next. Remembers the one that worked. */
 let workingModel: string | null = null;
+const TRANSIENT = /\b(500|502|503|504)\b|aborted|timed out|UNAVAILABLE|overloaded|high demand/i;
 async function googleLook(models: string[], prompt: string, bytes: Uint8Array, mime: string): Promise<Look> {
   let last = "no model tried";
-  for (const model of workingModel ? [workingModel] : models) {
-    const res = await withTimeout(45_000, (signal) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: "POST", signal,
-      headers: { "x-goog-api-key": GEMINI_KEY!, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: mime, data: b64(bytes) } }] }],
-        generationConfig: { temperature: 0, responseMimeType: "application/json", responseSchema: SCHEMA },
-      }),
-    }));
-    const text = await res.text();
-    if (res.status === 404 || (res.status === 400 && /not found|not supported|unknown model/i.test(text))) { last = `${model} ${res.status}`; continue; }
-    if (!res.ok) throw new Error(`${model} ${res.status}: ${text.slice(0, 300)}`);
+  const order = workingModel ? [workingModel, ...models.filter((m) => m !== workingModel)] : models;
+  for (const model of order) {
+    let status = 0, text = "";
+    try {
+      const res = await withTimeout(30_000, (signal) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: "POST", signal,
+        headers: { "x-goog-api-key": GEMINI_KEY!, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: mime, data: b64(bytes) } }] }],
+          generationConfig: { temperature: 0, responseMimeType: "application/json", responseSchema: SCHEMA },
+        }),
+      }));
+      status = res.status; text = await res.text();
+    } catch (e) {
+      last = `${model}: ${e instanceof Error && e.name === "AbortError" ? "timed out" : String(e).slice(0, 120)}`;
+      if (workingModel === model) workingModel = null;
+      continue;
+    }
+    if (status === 404 || (status === 400 && /not found|not supported|unknown model/i.test(text))) { last = `${model} ${status}`; continue; }
+    if (status >= 500) { last = `${model} ${status}: ${text.slice(0, 160)}`; if (workingModel === model) workingModel = null; continue; }
+    if (status < 200 || status >= 300) throw new Error(`${model} ${status}: ${text.slice(0, 300)}`);
     const out = JSON.parse(text) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
     const raw = out.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
     const look = clean(JSON.parse(raw || "null"));
@@ -97,7 +107,7 @@ async function googleLook(models: string[], prompt: string, bytes: Uint8Array, m
     workingModel = model;
     return look;
   }
-  throw new Error(`No usable Google model (${last}). Set app_settings.tag_model.`);
+  throw new Error(`No Google model answered (${last}). UNAVAILABLE`);
 }
 
 /** Fallback when there is no Google key: fal's vision LLM endpoint. */
@@ -182,6 +192,14 @@ Deno.serve(async (req: Request) => {
   }
   if (!allowed) return json({ error: "Not allowed." }, 403);
   const body = await req.json().catch(() => ({})) as { limit?: number; table?: Table; ids?: string[]; force?: boolean; urls?: { table: Table; after?: string; limit?: number }; colours?: { table: Table; items: { id: string; hue: string; tone: string }[] } };
+  if ((body as { models?: boolean }).models) {
+    // Which Google models this key can call (names only), to pick app_settings.tag_model.
+    if (!GEMINI_KEY) return json({ error: "No GEMINI_KEY." }, 400);
+    const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200", { headers: { "x-goog-api-key": GEMINI_KEY } });
+    const out = await res.json().catch(() => ({})) as { models?: { name: string; supportedGenerationMethods?: string[] }[]; error?: { message?: string } };
+    if (!res.ok) return json({ error: out.error?.message ?? `Google ${res.status}` }, 502);
+    return json({ models: (out.models ?? []).filter((m) => m.supportedGenerationMethods?.includes("generateContent")).map((m) => m.name.replace(/^models\//, "")) });
+  }
   if (body.urls) {
     const t = body.urls.table === "products" ? "products" : "supplier_products";
     let q = svc.from(t).select("id, swatch_path").not("swatch_path", "is", null).order("id").limit(Math.min(250, Math.max(1, Number(body.urls.limit ?? 200))));
@@ -214,7 +232,7 @@ Deno.serve(async (req: Request) => {
   const limit = Math.min(40, Math.max(1, Number(body.limit ?? 12)));
   const { data: settingsRows } = await svc.from("app_settings").select("key, value").in("key", ["tag_model", "tag_fal_model"]);
   const settings: Record<string, unknown> = {}; for (const s of settingsRows ?? []) settings[s.key] = s.value;
-  const googleModels = [...new Set([settings.tag_model ? String(settings.tag_model) : "", "gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"].filter(Boolean))];
+  const googleModels = [...new Set([settings.tag_model ? String(settings.tag_model) : "", "gemini-flash-lite-latest", "gemini-flash-latest", "gemini-2.5-flash-lite", "gemini-2.5-flash"].filter(Boolean))];
   const falModel = String(settings.tag_fal_model ?? "google/gemini-flash-1.5");
 
   const cols = "id, name, type, collection, length_in, width_in, swatch_path, colour_family, tone, hue, surfaces, rooms, tags, tag_tries";
@@ -257,7 +275,8 @@ Deno.serve(async (req: Request) => {
     } catch (e) {
       const msg = (e instanceof Error ? e.message : String(e)).slice(0, 400);
       if (PROVIDER_DOWN.test(msg)) { providerDown = msg; return { table, id: r.id, name: r.name, error: msg }; }
-      await svc.from(table).update({ tag_error: msg, tag_tries: r.tag_tries + 1 }).eq("id", r.id);
+      // A busy or slow provider is not the product's fault: keep it in the queue without using up a try.
+      await svc.from(table).update(TRANSIENT.test(msg) ? { tag_error: msg } : { tag_error: msg, tag_tries: r.tag_tries + 1 }).eq("id", r.id);
       return { table, id: r.id, name: r.name, error: msg };
     }
   };

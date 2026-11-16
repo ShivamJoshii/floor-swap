@@ -1,10 +1,11 @@
 // Floor Swap — showcase: one styled room photo per product, made from its swatch alone.
 // Used on builder sheets (builders have no room photo of their own). Made once per product, then reused.
 // Each one uses one image from the store's plan, so only products a person picked are made (never a whole-store sweep).
+// Stores listed in app_settings.codex_store_ids try the ChatGPT worker first (see worker/), then the normal provider.
 // POST { store_id, product_ids: string[], confirm: true, limit?: number, force?: boolean }
 // Returns { done: [{id, path}], failed: [{id, error}], remaining, out_of_images }
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "npm:@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -12,6 +13,7 @@ const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const FAL_KEY = Deno.env.get("FAL_KEY");
 const GEMINI_KEY = Deno.env.get("GEMINI_KEY");
 const PER_CALL = 3; // parallel renders per request; the client loops for more
+const CODEX_MODEL = "chatgpt-subscription"; // images made by the ChatGPT worker; no per-image provider cost
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -101,6 +103,34 @@ async function falGen(model: string, prompt: string, refUrl: string, timeoutMs =
   } finally { clearTimeout(timer); }
 }
 
+// Queue one image for the ChatGPT worker and wait for it. Any failure or timeout hands over to the normal provider.
+async function codexGen(svc: SupabaseClient, storeId: string, prompt: string, refUrl: string, waitMs: number): Promise<{ ok: true; image: Img } | { ok: false; error: string }> {
+  const outPath = `${storeId}/showcase/codex-${crypto.randomUUID()}.png`;
+  const up = await svc.storage.from("renders").createSignedUploadUrl(outPath);
+  if (up.error || !up.data) return { ok: false, error: `chatgpt: could not prepare upload (${up.error?.message ?? ""})` };
+  const { data: job, error: jerr } = await svc.from("codex_jobs").insert({
+    store_id: storeId, prompt, input_urls: [refUrl], upload_url: up.data.signedUrl, output_path: outPath,
+  }).select("id").single();
+  if (jerr || !job) return { ok: false, error: `chatgpt: could not queue (${jerr?.message ?? ""})` };
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const { data: j } = await svc.from("codex_jobs").select("status, error").eq("id", job.id).maybeSingle();
+    if (!j || j.status === "failed" || j.status === "cancelled") return { ok: false, error: `chatgpt: ${j?.error ?? "job lost"}` };
+    if (j.status === "done") {
+      const dl = await svc.storage.from("renders").download(outPath);
+      if (dl.error || !dl.data) return { ok: false, error: "chatgpt: output missing from storage" };
+      const bytes = new Uint8Array(await dl.data.arrayBuffer());
+      await svc.storage.from("renders").remove([outPath]); // re-stored below under the product's own name
+      if (bytes.length < 1000) return { ok: false, error: "chatgpt: output was empty" };
+      return { ok: true, image: { bytes, mime: "image/png" } };
+    }
+  }
+  await svc.from("codex_jobs").update({ status: "cancelled", error: "showcase stopped waiting", finished_at: new Date().toISOString() })
+    .eq("id", job.id).in("status", ["pending", "running"]);
+  return { ok: false, error: "chatgpt: timed out" };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
@@ -140,6 +170,15 @@ Deno.serve(async (req: Request) => {
   const modelCosts = (settings.model_costs ?? {}) as Record<string, number>;
   const flatCost = Number(settings.provider_cost_cents_per_image ?? 0);
 
+  // ChatGPT route: only for listed stores, and only while the worker says it is alive and logged in.
+  const codexStores = Array.isArray(settings.codex_store_ids) ? (settings.codex_store_ids as unknown[]).map(String) : [];
+  const codexWaitMs = Math.min(110, Math.max(20, Number(settings.codex_wait_seconds ?? 75) || 75)) * 1000;
+  let codexOn = codexStores.includes(body.store_id);
+  if (codexOn) {
+    const { data: w } = await svc.from("codex_worker").select("last_seen, ok").eq("id", 1).maybeSingle();
+    codexOn = !!w?.ok && !!w.last_seen && Date.now() - new Date(w.last_seen).getTime() < 45_000;
+  }
+
   // Charge one image per product before generating. Stop at the first one the store can't cover.
   const usage = new Map<string, string>();
   let outOfImages = false;
@@ -161,20 +200,26 @@ Deno.serve(async (req: Request) => {
       const signed = await svc.storage.from("swatches").createSignedUrl(p.swatch_path, 3600);
       if (signed.error || !signed.data) throw new Error("Swatch not found.");
       const prompt = buildPrompt(p);
-      let r: { ok: true; image: Img } | { ok: false; error: string };
-      let used = primary;
-      if (wantGoogle) {
-        const s = await fetch(signed.data.signedUrl);
-        r = await googleGen(primary, prompt, { bytes: new Uint8Array(await s.arrayBuffer()), mime: (s.headers.get("content-type") ?? "image/jpeg").split(";")[0] });
-        if (!r.ok && fallback) { console.warn("google failed", r.error); used = fallback; r = await falGen(fallback, prompt, signed.data.signedUrl); }
-      } else r = await falGen(primary, prompt, signed.data.signedUrl);
+      let r: { ok: true; image: Img } | { ok: false; error: string } = codexOn
+        ? await codexGen(svc, body.store_id!, prompt, signed.data.signedUrl, codexWaitMs)
+        : { ok: false, error: "chatgpt route off" };
+      let used = CODEX_MODEL;
+      if (!r.ok) {
+        if (codexOn) console.warn("chatgpt route failed, using normal provider:", r.error);
+        used = primary;
+        if (wantGoogle) {
+          const s = await fetch(signed.data.signedUrl);
+          r = await googleGen(primary, prompt, { bytes: new Uint8Array(await s.arrayBuffer()), mime: (s.headers.get("content-type") ?? "image/jpeg").split(";")[0] });
+          if (!r.ok && fallback) { console.warn("google failed", r.error); used = fallback; r = await falGen(fallback, prompt, signed.data.signedUrl); }
+        } else r = await falGen(primary, prompt, signed.data.signedUrl);
+      }
       if (!r.ok) throw new Error(r.error);
       const ext = r.image.mime.includes("png") ? "png" : r.image.mime.includes("webp") ? "webp" : "jpg";
       const path = `${body.store_id}/showcase/${p.id}.${ext}`;
       const up = await svc.storage.from("renders").upload(path, r.image.bytes, { contentType: r.image.mime, upsert: true });
       if (up.error) throw new Error(up.error.message);
       await svc.from("products").update({ showcase_path: path, showcase_status: "done", showcase_error: null, showcase_updated_at: new Date().toISOString() }).eq("id", p.id);
-      await svc.rpc("settle_images", { p_usage: usage.get(p.id), p_delivered: 1, p_cost: Number(modelCosts[used] ?? flatCost), p_model: used });
+      await svc.rpc("settle_images", { p_usage: usage.get(p.id), p_delivered: 1, p_cost: used === CODEX_MODEL ? 0 : Number(modelCosts[used] ?? flatCost), p_model: used });
       return { id: p.id, path };
     } catch (e) {
       const msg = (e instanceof Error ? e.message : String(e)).slice(0, 500);

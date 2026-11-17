@@ -188,7 +188,7 @@ export default function Products({ ctx }: { ctx: Ctx }) {
     if (!f) return;
     setImportMsg("Reading file…");
     try {
-      type Item = { name: string; type?: string; sku?: string | null; notes?: string | null; length_in?: number | null; width_in?: number | null; finish?: string | null; collection?: string | null; colour_family?: string | null; supplier?: string | null; jpg_b64: string; vibes?: string[]; tone?: string | null; hue?: string | null; surfaces?: string[]; rooms?: string[]; tags?: string[] };
+      type Item = { name: string; type?: string; sku?: string | null; notes?: string | null; length_in?: number | null; width_in?: number | null; finish?: string | null; collection?: string | null; colour_family?: string | null; supplier?: string | null; jpg_b64: string; vibes?: string[]; tone?: string | null; hue?: string | null; surfaces?: string[]; rooms?: string[]; tags?: string[]; replace_photo?: boolean };
       const items = JSON.parse(await f.text()) as Item[];
       if (!Array.isArray(items)) throw new Error("Not a catalog file.");
       // Resolve / create suppliers named in the file (shared by default).
@@ -201,13 +201,33 @@ export default function Products({ ctx }: { ctx: Ctx }) {
       }
       const existingNames = new Set(list.map((p) => p.name.toLowerCase()));
       const existingSkus = new Set(list.filter((p) => p.sku && p.supplier_id).map((p) => `${p.supplier_id}:${p.sku!.toLowerCase()}`));
-      let done = 0, skipped = 0, shared = 0; const errors: string[] = []; const newIds: string[] = [];
+      let done = 0, skipped = 0, shared = 0, replaced = 0; const errors: string[] = []; const newIds: string[] = [];
       for (let idx = 0; idx < items.length; idx++) {
         const it = items[idx];
         if (!it.name || !it.jpg_b64) { skipped++; continue; }
         const supplierId = it.supplier ? supMap.get(it.supplier.trim().toLowerCase()) ?? null : null;
         const dupKey = supplierId && it.sku ? `${supplierId}:${it.sku.toLowerCase()}` : null;
-        if (dupKey ? existingSkus.has(dupKey) : existingNames.has(it.name.toLowerCase())) { skipped++; continue; }
+        if (dupKey ? existingSkus.has(dupKey) : existingNames.has(it.name.toLowerCase())) {
+          // Already in the store. Items marked replace_photo get the file's photo; everything else about the product is left alone.
+          if (!it.replace_photo) { skipped++; continue; }
+          const cur = list.find((p) => dupKey ? (p.supplier_id === supplierId && p.sku?.toLowerCase() === it.sku!.toLowerCase()) : p.name.toLowerCase() === it.name.toLowerCase());
+          if (!cur) { skipped++; continue; }
+          setImportMsg(`Replacing photo ${idx + 1} of ${items.length}: ${it.name}`);
+          const nb = Uint8Array.from(atob(it.jpg_b64), (c) => c.charCodeAt(0));
+          const npath = `${store}/${crypto.randomUUID()}.jpg`;
+          const nu = await supabase.storage.from("swatches").upload(npath, nb, { contentType: "image/jpeg" });
+          if (nu.error) { errors.push(`${it.name}: ${nu.error.message}`); continue; }
+          const { error: pe } = await supabase.from("products").update({ swatch_path: npath }).eq("id", cur.id);
+          if (pe) { errors.push(`${it.name}: ${pe.message}`); continue; }
+          replaced++;
+          if (supplierId && it.sku) {
+            // The shared catalogue copy too, when this account is allowed to edit it (its uploader or a platform admin).
+            const cpath = `${ctx.session.user.id}/${crypto.randomUUID()}.jpg`;
+            const cu = await supabase.storage.from("catalog").upload(cpath, nb, { contentType: "image/jpeg" });
+            if (!cu.error) await supabase.from("supplier_products").update({ swatch_path: cpath }).eq("supplier_id", supplierId).eq("sku", it.sku);
+          }
+          continue;
+        }
         setImportMsg(`Importing ${idx + 1} of ${items.length}: ${it.name}`);
         const bytes = Uint8Array.from(atob(it.jpg_b64), (c) => c.charCodeAt(0));
         const id = crypto.randomUUID(); const path = `${store}/${id}.jpg`;
@@ -232,8 +252,8 @@ export default function Products({ ctx }: { ctx: Ctx }) {
           }
         }
       }
-      setImportMsg(`Imported ${done}${shared ? `, ${shared} shared to supplier catalog` : ""}${skipped ? `, skipped ${skipped} already there` : ""}${errors.length ? `, ${errors.length} failed: ${errors[0]}` : ""}.`);
-      ctx.toast(`Imported ${done} products.`); load();
+      setImportMsg(`Imported ${done}${replaced ? `, replaced ${replaced} photo${replaced === 1 ? "" : "s"}` : ""}${shared ? `, ${shared} shared to supplier catalog` : ""}${skipped ? `, skipped ${skipped} already there` : ""}${errors.length ? `, ${errors.length} failed: ${errors[0]}` : ""}.`);
+      ctx.toast(replaced ? `Imported ${done} products, replaced ${replaced} photos.` : `Imported ${done} products.`); load();
     } catch (e) { setImportMsg(e instanceof Error ? e.message : String(e)); }
   }
 

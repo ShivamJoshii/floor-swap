@@ -67,12 +67,12 @@ Deno.serve(async (req: Request) => {
   if (!rows.length) return json({ error: "Not found." }, 404);
   const storeId = rows[0].store_id;
 
-  // Which public copies should exist: swatch first, room photo second.
+  // Which public copies should exist: room photo first when there is one, then the swatch.
   type Want = { from: string; src: string; dest: string; productId: string; alt: string };
   const wants: Want[] = [];
   for (const r of rows) {
-    if (r.swatch_path && r.swatch_ver) wants.push({ from: "swatches", src: r.swatch_path, dest: `${storeId}/${r.id}-s-${r.swatch_ver}.${ext(r.swatch_path)}`, productId: r.id, alt: `${r.name} sample` });
     if (r.showcase_path && r.showcase_ver) wants.push({ from: "renders", src: r.showcase_path, dest: `${storeId}/${r.id}-r-${r.showcase_ver}.${ext(r.showcase_path)}`, productId: r.id, alt: `${r.name} in a room` });
+    if (r.swatch_path && r.swatch_ver) wants.push({ from: "swatches", src: r.swatch_path, dest: `${storeId}/${r.id}-s-${r.swatch_ver}.${ext(r.swatch_path)}`, productId: r.id, alt: `${r.name} sample` });
   }
 
   // What is there now.

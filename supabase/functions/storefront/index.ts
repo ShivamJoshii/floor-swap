@@ -3,7 +3,7 @@
 // Returns the store's active products that have "show on website" on, in the shape the website already reads:
 //   { site, products, imagesByProduct, categories }
 // Photos: the swatches and renders buckets are private, so each published photo is copied into the public
-// `storefront` bucket (a new copy whenever the photo changes) and photos no longer published are removed.
+// `storefront` bucket (a new copy whenever the photo changes); copies are removed when a product is unpublished.
 // Never returned: prices, notes, supplier details.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -90,7 +90,10 @@ Deno.serve(async (req: Request) => {
     if (cerr && !/exists|duplicate/i.test(cerr.message)) { console.warn("copy failed", w.src, cerr.message); failed.add(w.dest); }
   });
   const wanted = new Set(wants.map((w) => w.dest));
-  const stale = [...have].filter((p) => !wanted.has(p));
+  // Remove public copies only for products that are no longer published. Older versions of a photo that
+  // is still published stay, because a website built earlier still points at them until it rebuilds.
+  const published = new Set(rows.map((r) => r.id));
+  const stale = [...have].filter((p) => !wanted.has(p) && !published.has(p.slice(storeId.length + 1, storeId.length + 37)));
   for (let i = 0; i < stale.length; i += 100) await svc.storage.from(BUCKET).remove(stale.slice(i, i + 100));
 
   const used = CATEGORIES.map((c, i) => ({ ...c, id: c.slug, position: i }));
